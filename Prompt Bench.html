@@ -1,0 +1,444 @@
+<!doctype html><html lang="en"><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Prompt Bench</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: instrument bench — prompt editor docked left, test run table right; stacks on phones */
+:root{
+  --panel-pad:20px;
+  --bg:#f4f6f5; --surface:#ffffff; --sunk:#eaeeec; --line:#d3dad7;
+  --fg:#18211e; --muted:#5b6964; --accent:#1f6f5c; --accent-ink:#ffffff;
+  --ok:#21794a; --ok-bg:#e1f2e8; --bad:#b3261e; --bad-bg:#fbe5e2; --run:#8a5a00; --run-bg:#fbefd6;
+  --f-ui:"Instrument Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--f-ui);font-size:14px;line-height:1.5;
+  padding-left:max(24px,env(safe-area-inset-left,0px));padding-right:max(24px,env(safe-area-inset-right,0px));padding-block:24px 48px}
+.wrap{max-width:1400px;margin:0 auto;display:flex;flex-direction:column;gap:24px}
+header{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 16px;justify-content:space-between}
+header>div{display:grid;gap:6px;min-width:0}
+h1{font-size:22px;font-weight:700;letter-spacing:-.01em;margin:0}
+h1 span{color:var(--accent)}
+.sub{color:var(--muted);margin:0;font-size:13px}
+.grid{display:grid;grid-template-columns:minmax(300px,420px) minmax(0,1fr);gap:24px;align-items:start}
+@media (max-width:900px){
+  :root{--panel-pad:16px}
+  body{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:16px 32px}
+  .grid{grid-template-columns:1fr;gap:16px}.wrap{gap:16px}
+}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column;min-width:0}
+.panel-h{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:16px var(--panel-pad);border-bottom:1px solid var(--line)}
+.label{display:inline-flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.left-column{display:flex;flex-direction:column;gap:24px;min-width:0}
+@media (max-width:900px){.prompt-panel{position:static}}
+textarea{width:100%;min-height:320px;resize:vertical;border:0;background:var(--surface);color:var(--fg);
+  font-family:var(--f-mono);font-size:12.5px;line-height:1.6;padding:var(--panel-pad);outline:none;border-radius:0 0 8px 8px}
+textarea:focus-visible{box-shadow:inset 0 0 0 2px var(--accent)}
+.meta{font-family:var(--f-mono);font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:16px var(--panel-pad);border-bottom:1px solid var(--line);background:var(--sunk)}
+.toolbar .spacer{flex:1}
+button,select,.filebtn{font:inherit;font-size:13px;font-weight:500;border-radius:6px;border:1px solid var(--line);
+  background:var(--surface);color:var(--fg);min-height:40px;padding:10px 14px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+button:hover:not(:disabled),.filebtn:hover{border-color:var(--accent)}
+button:focus-visible,select:focus-visible,.filebtn:focus-within{outline:2px solid var(--accent);outline-offset:1px}
+button:disabled{opacity:.45;cursor:not-allowed}
+.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.primary:hover:not(:disabled){filter:brightness(1.08)}
+.filebtn input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.filebtn{position:relative}
+.stats{display:flex;flex-wrap:wrap;gap:6px 18px;padding:12px var(--panel-pad);border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;font-size:13px}
+.stats b{font-family:var(--f-mono);font-weight:500}
+.bar{height:3px;background:var(--sunk);overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .25s}
+.notice{padding:12px var(--panel-pad);font-size:13px;border-bottom:1px solid var(--line);color:var(--muted)}
+.notice.err{color:var(--bad);background:var(--bad-bg)}
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;min-width:760px}
+th{text-align:left;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
+  padding:14px 16px;border-bottom:1px solid var(--line);background:var(--surface);position:sticky;top:0}
+td{padding:14px 16px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+th:first-child,td:first-child{padding-left:var(--panel-pad)}
+th:last-child,td:last-child{padding-right:var(--panel-pad)}
+td.id{font-family:var(--f-mono);font-size:12px;color:var(--muted);white-space:nowrap;width:60px}
+td.txt{font-size:13px;white-space:pre-wrap;word-break:break-word;max-width:260px}
+td.resp{min-width:280px}
+.resp-box{font-size:13px;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto}
+.resp-box.dim{color:var(--muted);font-style:italic}
+.chip{display:inline-block;font-size:11px;font-weight:600;padding:3px 9px;border-radius:999px;white-space:nowrap;background:var(--sunk);color:var(--muted)}
+.chip.running{background:var(--run-bg);color:var(--run)}
+.chip.done{background:var(--ok-bg);color:var(--ok)}
+.chip.error{background:var(--bad-bg);color:var(--bad)}
+td.act{white-space:nowrap;width:1%}
+td.act button{min-height:36px;padding:7px 12px;font-size:12px}
+.sample-tag{font-size:11px;font-weight:600;color:var(--run);background:var(--run-bg);padding:3px 9px;border-radius:999px}
+.help{padding:16px var(--panel-pad);font-size:12.5px;color:var(--muted);border-top:1px solid var(--line)}
+.help code{font-family:var(--f-mono);font-size:11.5px;background:var(--sunk);padding:1px 5px;border-radius:4px;color:var(--fg)}
+.empty{padding:40px var(--panel-pad);text-align:center;color:var(--muted)}
+.knowledge-body{padding:var(--panel-pad);display:flex;flex-direction:column;gap:12px}
+#documents{display:grid;gap:10px}
+.document{display:flex;align-items:flex-start;gap:10px;padding:12px;border:1px solid var(--line);border-radius:6px;min-width:0}
+.document-label{display:flex;align-items:flex-start;gap:10px;flex:1;min-width:0;cursor:pointer}
+.document-open{display:inline-flex;align-items:center;justify-content:center;flex:0 0 40px;width:40px;height:40px;padding:0;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--fg);text-decoration:none}
+.document-open:hover{border-color:var(--accent)}.document-open:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.document input{margin-top:4px;accent-color:var(--accent);flex-shrink:0}
+.document span{min-width:0;overflow-wrap:anywhere}.document small{display:block;margin-top:3px;color:var(--muted);font-size:11px}
+.context{overflow-wrap:anywhere}.filebtn:has(input:disabled){opacity:.45;cursor:not-allowed}
+dialog{width:min(460px,calc(100% - 32px));border:1px solid var(--line);border-radius:12px;color:var(--fg);background:var(--surface);padding:24px}
+dialog::backdrop{background:#18211e66}dialog h2{margin:0 0 8px;font-size:20px}.model-options{display:grid;gap:10px;margin:20px 0}.model-options button{justify-content:space-between}.model-options button[aria-pressed="true"]{border-color:var(--accent);background:var(--ok-bg)}
+@media (max-width:900px){.left-column{gap:16px}dialog{padding:20px}}
+.prompt-actions{display:flex;align-items:center;gap:12px}.expand-prompt{width:40px;height:40px;padding:0;justify-content:center}
+#promptDialog{width:min(960px,calc(100% - 32px));max-height:calc(100dvh - 32px);overflow:auto}
+.expanded-prompt-layout{display:flex;flex-direction:column;gap:16px;min-height:0}
+#expandedPrompt{height:55vh;height:55dvh;min-height:120px;max-height:65dvh;padding:16px;border:1px solid var(--line);border-radius:6px;resize:vertical}
+@media (prefers-reduced-motion:reduce){.bar i{transition:none}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Prompt <span>Bench</span></h1>
+      <p class="sub">A workspace for prompts, knowledge, and benchmark cases. Standalone UI prototype.</p>
+    </div>
+    <span class="meta" id="modelNote">Interactive prototype · no live requests</span>
+  </header>
+
+  <div class="grid">
+    <div class="left-column">
+    <section class="panel prompt-panel" aria-labelledby="sysLabel">
+      <div class="panel-h">
+        <span class="label" id="sysLabel">System prompt</span>
+        <div class="prompt-actions"><span class="meta" id="sysMeta">0 chars</span><button id="expandPromptBtn" class="expand-prompt" title="Expand system prompt" aria-label="Expand system prompt" aria-haspopup="dialog"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H3v5M3 3l7 7M16 21h5v-5M21 21l-7-7M16 3h5v5M21 3l-7 7M8 21H3v-5M3 21l7-7"/></svg></button></div>
+      </div>
+      <textarea id="sysPrompt" spellcheck="false" aria-labelledby="sysLabel"></textarea>
+    </section>
+
+    <section class="panel" aria-labelledby="knowledgeLabel">
+      <div class="panel-h"><span class="label" id="knowledgeLabel">Knowledge base</span><span class="chip">Database not connected</span></div>
+      <div class="knowledge-body">
+        <p class="sub">Choose documents for benchmark context. Open TXT, MD, or PDF in a new tab; download DOCX to read.</p>
+        <label class="filebtn" for="docInput">Upload documents<input type="file" id="docInput" multiple accept=".txt,.md,.pdf,.docx"></label>
+        <div id="documents"></div>
+        <p class="sub" id="docNotice" role="status">Uploads stay in this page until reload.</p>
+      </div>
+    </section>
+    </div>
+    <section class="panel" aria-labelledby="casesLabel">
+      <div class="panel-h">
+        <span class="label" id="casesLabel">Benchmark cases <span class="sample-tag" id="sampleTag">Sample data</span></span>
+        <span class="meta" id="fileMeta">5 example cases loaded</span>
+      </div>
+      <div class="toolbar">
+        <label class="filebtn" for="csvInput">Import CSV<input type="file" id="csvInput" accept=".csv,text/csv"></label>
+        <button id="modelBtn">Change model · GPT-4.1</button>
+        <span class="spacer"></span>
+        <button class="primary" id="runBtn">Run demo</button>
+        <button id="stopBtn" disabled>Stop</button>
+        <button id="exportBtn" disabled>Export demo results</button>
+      </div>
+      <div class="notice context" id="contextSummary" aria-live="polite"></div>
+      <div class="bar"><i id="progress"></i></div>
+      <div class="stats" id="stats"></div>
+      <div class="notice" id="notice" role="status" hidden></div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr id="headRow"></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <div class="help">
+        CSV needs one column named <code>input</code>, with one question per row. Demo responses are placeholders.
+      </div>
+    </section>
+  </div>
+</div>
+
+<dialog id="promptDialog" aria-labelledby="expandedPromptTitle" aria-describedby="expandedPromptHelp">
+  <div class="expanded-prompt-layout">
+    <div><h2 id="expandedPromptTitle">System prompt</h2><p class="sub" id="expandedPromptHelp">Changes sync automatically.</p></div>
+    <textarea id="expandedPrompt" spellcheck="false" aria-labelledby="expandedPromptTitle"></textarea>
+    <form method="dialog"><button>Close</button></form>
+  </div>
+</dialog>
+<dialog id="modelDialog" aria-labelledby="modelTitle">
+  <h2 id="modelTitle">Choose a model</h2>
+  <p class="sub">Choose the model for this demo.</p>
+  <div class="model-options" id="modelOptions"></div>
+  <form method="dialog"><button>Close</button></form>
+</dialog>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const DRAFT_KEY = "promptbench.systemPrompt";
+  const CONCURRENCY = 2;
+  const MAX_ROWS = 300;
+
+  const SAMPLE_PROMPT = `You are the WhatsApp customer service assistant for an online retailer in Hong Kong.
+
+Classify the customer's message into exactly one intent:
+- order_status: asks where an order is or when it ships
+- refund_request: explicitly asks for money back or a refund
+- complaint: unhappy about service, staff or product, with no refund ask
+- product_question: asks about a product's features, size or stock
+- account_issue: login, password, phone number or profile problems
+- other: anything else
+
+Precedence when several apply: refund_request > complaint > order_status.
+Messages may be in English, Cantonese or mixed.
+
+Reply with only the intent label, lowercase, nothing else.`;
+
+  const SAMPLE_ROWS = [
+    {id:"01", input:"My parcel still not arrive, 3 days already, want my money back"},
+    {id:"02", input:"點解我個order仲未出貨？"},
+    {id:"03", input:"Your delivery guy was rude and threw my box"},
+    {id:"04", input:"Can't log in after I changed phone number"},
+    {id:"05", input:"Is the blue one waterproof?"},
+  ];
+
+  let state = { rows: [], isSample: true, running: false, importing: false };
+  let model = "GPT-4.1";
+  let documents = [
+    { name: "Returns policy.pdf", detail: "Example document · No file attached", selected: true },
+    { name: "Product guide.md", detail: "Example document · No file attached", selected: false },
+  ];
+  let stopRequested = false;
+
+  // ---------- system prompt ----------
+  const ta = $("sysPrompt");
+  let draft = null;
+  try { draft = localStorage.getItem(DRAFT_KEY); } catch (e) {}
+  ta.value = draft ?? SAMPLE_PROMPT;
+  const updateSysMeta = () => { $("sysMeta").textContent = ta.value.length.toLocaleString() + " chars"; };
+  ta.addEventListener("input", () => {
+    updateSysMeta();
+    resetResults();
+    try { localStorage.setItem(DRAFT_KEY, ta.value); } catch (e) {}
+  });
+  updateSysMeta();
+  $("expandPromptBtn").addEventListener("click", () => {
+    $("expandedPrompt").value = ta.value;
+    $("promptDialog").showModal();
+    $("expandedPrompt").focus();
+  });
+  $("expandedPrompt").addEventListener("input", () => {
+    ta.value = $("expandedPrompt").value;
+    ta.dispatchEvent(new Event("input"));
+  });
+
+  // ---------- CSV ----------
+  function parseCSV(text) {
+    text = text.replace(/^﻿/, "");
+    const out = []; let row = [], field = "", q = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (q) {
+        if (c === '"') { if (text[i+1] === '"') { field += '"'; i++; } else q = false; }
+        else field += c;
+      } else if (c === '"') q = true;
+      else if (c === ",") { row.push(field); field = ""; }
+      else if (c === "\n" || c === "\r") {
+        if (c === "\r" && text[i+1] === "\n") i++;
+        row.push(field); field = ""; out.push(row); row = [];
+      } else field += c;
+    }
+    if (field !== "" || row.length) { row.push(field); out.push(row); }
+    return out.filter(r => r.some(v => v.trim() !== ""));
+  }
+  function rowsFromCSV(text) {
+    const grid = parseCSV(text);
+    if (grid.length < 2) throw new Error("The file has no data rows under the header.");
+    const headers = grid[0];
+    const inCol = headers.findIndex(header => header.trim().toLowerCase() === "input");
+    if (inCol < 0) throw new Error("Could not find the required column named \"input\".");
+    const data = grid.slice(1).map(r => (r[inCol] ?? "").trim()).filter(Boolean)
+      .map((input, i) => ({ id: String(i + 1).padStart(2, "0"), input }));
+    return { data, inputName: headers[inCol].trim() };
+  }
+
+  $("csvInput").addEventListener("change", async e => {
+    const f = e.target.files[0]; e.target.value = "";
+    if (!f || state.running || state.importing) return;
+    state.importing = true; syncButtons();
+    try {
+      const { data, inputName } = rowsFromCSV(await f.text());
+      let note = "";
+      if (data.length > MAX_ROWS) { note = ` First ${MAX_ROWS} of ${data.length} rows kept.`; data.length = MAX_ROWS; }
+      if (!data.length) throw new Error("Every row's input cell is empty.");
+      state.rows = data.map(r => ({ ...r, status: "queued", response: "", error: "" }));
+      state.isSample = false;
+      $("sampleTag").hidden = true;
+      $("fileMeta").textContent = `${f.name} · ${data.length} cases · input column "${inputName}"`;
+      showNotice(note ? note.trim() : "");
+      render();
+    } catch (err) {
+      showNotice("Import failed: " + err.message, true);
+    } finally { state.importing = false; syncButtons(); }
+  });
+
+  // ---------- demo configuration ----------
+  const selectedNames = () => documents.filter(d => d.selected).map(d => d.name);
+  function updateContext() {
+    const names = selectedNames();
+    $("contextSummary").textContent = `Demo context · ${model} · ${names.length} document${names.length === 1 ? "" : "s"} selected: ${names.join(", ") || "None (prompt only)"}`;
+  }
+  function resetResults() {
+    showNotice("");
+    state.rows.forEach(r => { r.status = "queued"; r.response = ""; r.error = ""; });
+    render(); updateContext();
+  }
+  function renderDocuments() {
+    $("documents").replaceChildren();
+    documents.forEach(d => {
+      const row = el("div", "document");
+      const label = el("label", "document-label");
+      const check = document.createElement("input"); check.type = "checkbox"; check.checked = d.selected; check.disabled = state.running;
+      check.addEventListener("change", () => { d.selected = check.checked; resetResults(); });
+      const text = el("span", null, d.name); text.append(el("small", null, d.detail));
+      label.append(check, text);
+      const open = el(d.url ? "a" : "button", "document-open");
+      const description = d.url ? (d.download ? `Download ${d.name} to read` : `Open ${d.name} in a new tab`) : `${d.name}: example file unavailable`;
+      open.title = description; open.setAttribute("aria-label", description);
+      if (d.url) {
+        open.href = d.url;
+        if (d.download) open.download = d.name;
+        else { open.target = "_blank"; open.rel = "noopener noreferrer"; }
+      } else { open.type = "button"; open.disabled = true; }
+      open.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3h7v7M21 3l-10 10"/><path d="M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5"/></svg>';
+      row.append(label, open); $("documents").append(row);
+    });
+  }
+  $("docInput").addEventListener("change", e => {
+    if (state.running) return;
+    const files = Array.from(e.target.files); e.target.value = "";
+    const valid = files.filter(f => /\.(txt|md|pdf|docx)$/i.test(f.name));
+    valid.forEach(f => {
+      const extension = f.name.split(".").pop().toLowerCase();
+      const mime = extension === "pdf" ? "application/pdf" : extension === "docx" ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "text/plain;charset=utf-8";
+      documents.push({ name: f.name, detail: `${Math.ceil(f.size / 1024)} KB · This page only`, selected: true, url: URL.createObjectURL(f.slice(0, f.size, mime)), download: extension === "docx" });
+    });
+    $("docNotice").textContent = `${valid.length} document(s) added. ${files.length > valid.length ? "Unsupported files skipped. " : ""}Files open locally · This session only.`;
+    renderDocuments(); resetResults();
+  });
+  $("modelBtn").addEventListener("click", () => $("modelDialog").showModal());
+  ["GPT-4.1", "Gemini 2.5 Pro", "Claude Sonnet 4"].forEach(name => {
+    const button = el("button", null, name); button.type = "button";
+    button.addEventListener("click", () => { model = name; $("modelBtn").textContent = `Change model · ${name}`; updateModelOptions(); resetResults(); $("modelDialog").close(); });
+    $("modelOptions").append(button);
+  });
+  function updateModelOptions() { Array.from($("modelOptions").children).forEach(button => button.setAttribute("aria-pressed", String(button.textContent === model))); }
+
+  // ---------- demo run ----------
+  async function runRow(r) {
+    if (stopRequested) return;
+    r.status = "running"; r.response = ""; renderRow(r); renderStats();
+    await new Promise(resolve => setTimeout(resolve, 600));
+    r.status = stopRequested ? "queued" : "done";
+    r.response = stopRequested ? "" : "Demo response — connect a model to evaluate this case.";
+    renderRow(r); renderStats();
+  }
+  async function runQueue(list) {
+    if (state.running || state.importing) return;
+    if (!ta.value.trim()) { showNotice("Write a system prompt before running.", true); return; }
+    stopRequested = false; state.running = true; syncButtons();
+    let i = 0;
+    const worker = async () => { while (i < list.length && !stopRequested) await runRow(list[i++]); };
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, list.length) }, worker));
+    state.running = false; syncButtons(); renderStats();
+    showNotice(stopRequested ? "Demo stopped. Remaining cases have not run." : "Demo complete. Placeholder responses only; no accuracy has been measured.");
+  }
+  $("runBtn").addEventListener("click", () => {
+    if (!ta.value.trim()) { showNotice("Write a system prompt before running.", true); return; }
+    showNotice(""); resetResults(); runQueue(state.rows.slice());
+  });
+  $("stopBtn").addEventListener("click", () => { stopRequested = true; $("stopBtn").disabled = true; });
+
+  // ---------- export ----------
+  const csvCell = v => /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  $("exportBtn").addEventListener("click", () => {
+    const cols = ["id", "input", "demo_response", "demo_status", "demo_model", "selected_documents", "system_prompt"];
+    const lines = [cols.join(",")].concat(state.rows.map(r => [r.id, r.input, r.response, r.status, model, selectedNames().join("; "), ta.value].map(v => csvCell(String(v ?? ""))).join(",")));
+    const url = URL.createObjectURL(new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a"); link.href = url; link.download = "benchmark-demo-results.csv"; document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showNotice("Demo CSV download requested.");
+  });
+
+  // ---------- render ----------
+  function showNotice(msg, isErr) {
+    const n = $("notice"); n.hidden = !msg; n.textContent = msg || ""; n.classList.toggle("err", !!isErr);
+  }
+  function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+  const rowEls = new Map();
+  function render() {
+    const head = $("headRow"); head.replaceChildren();
+    ["ID","Input","Demo response","Demo status",""]
+      .forEach(h => head.append(el("th", null, h)));
+    const body = $("rows"); body.replaceChildren(); rowEls.clear();
+    if (!state.rows.length) {
+      const tr = el("tr"); const td = el("td", "empty", "Import a CSV of test cases to begin.");
+      td.colSpan = 5; tr.append(td); body.append(tr);
+    }
+    state.rows.forEach(r => {
+      const tr = el("tr");
+      const cells = {
+        id: el("td", "id", r.id), input: el("td", "txt", r.input),
+        resp: el("td", "resp"), status: el("td"),
+        act: el("td", "act"),
+      };
+      const box = el("div", "resp-box"); cells.resp.append(box);
+      const btn = el("button", null, "Rerun demo"); btn.type = "button";
+      btn.addEventListener("click", () => runQueue([r]));
+      cells.act.append(btn);
+      Object.values(cells).forEach(c => c && tr.append(c));
+      body.append(tr);
+      rowEls.set(r, { box, status: cells.status, btn });
+      renderRow(r);
+    });
+    renderStats(); syncButtons();
+  }
+  function renderRow(r) {
+    const e = rowEls.get(r); if (!e) return;
+    if (r.response) { e.box.textContent = r.response; e.box.classList.remove("dim"); }
+    else { e.box.textContent = r.status === "running" ? "Previewing…" : (r.status === "error" ? "" : "Not run yet"); e.box.classList.add("dim"); }
+    const label = { queued: "Queued", running: "Running", done: "Demo done", error: "Error" }[r.status];
+    e.status.replaceChildren(el("span", "chip " + r.status, label));
+    if (r.error) { const s = el("div", "meta", r.error); s.style.marginTop = "4px"; s.style.whiteSpace = "normal"; e.status.append(s); }
+    e.btn.disabled = state.running;
+  }
+
+  function renderStats() {
+    const n = state.rows.length;
+    const done = state.rows.filter(r => r.status === "done").length;
+    const err = state.rows.filter(r => r.status === "error").length;
+    const finished = done + err;
+    $("progress").style.width = n ? (finished / n * 100) + "%" : "0";
+    const s = $("stats"); s.replaceChildren();
+    const add = (k, v) => { const d = el("span"); d.append(k + " "); d.append(el("b", null, v)); s.append(d); };
+    add("Cases", String(n)); add("Completed", `${done}/${n}`);
+    if (err) add("Errors", String(err));
+    add("Mode", "Demo");
+    syncButtons();
+  }
+  function syncButtons() {
+    const locked = state.running || state.importing;
+    $("runBtn").disabled = locked || !state.rows.length;
+    $("stopBtn").disabled = !state.running || stopRequested;
+    $("exportBtn").disabled = locked || !state.rows.some(r => r.status === "done");
+    ["csvInput", "docInput", "modelBtn", "sysPrompt", "expandPromptBtn", "expandedPrompt"].forEach(id => $(id).disabled = locked);
+    document.querySelectorAll("#documents input").forEach(input => input.disabled = locked);
+    rowEls.forEach(e => e.btn.disabled = locked);
+  }
+
+  // ---------- boot ----------
+  state.rows = SAMPLE_ROWS.map(r => ({ ...r, status: "queued", response: "", error: "" }));
+  render();
+
+  renderDocuments(); updateModelOptions(); updateContext();
+
+})();
+</script>
+
+</body></html>
