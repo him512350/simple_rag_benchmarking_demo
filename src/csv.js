@@ -34,10 +34,10 @@ export function rowsFromCSV(text) {
 
 export const csvCell = value => /[",\n\r]/.test(String(value)) ? '"' + String(value).replace(/"/g, '""') + '"' : String(value);
 export function resultsCSV(rows, snapshot, project) {
-  const header = ['id', 'input', 'response', 'status', 'error', 'elapsed_ms', 'prompt_tokens', 'completion_tokens', 'total_tokens', 'model', 'selected_documents', 'system_prompt', 'document_fingerprints', 'run_at', 'project_id', 'project_name'];
+  const header = ['id', 'input', 'response', 'status', 'error', 'elapsed_ms', 'prompt_tokens', 'completion_tokens', 'total_tokens', 'model', 'selected_documents', 'system_prompt', 'document_fingerprints', 'run_at', 'project_id', 'project_name', 'output_limit'];
   const data = rows.map(row => {
     const source = row.status === 'done' || row.status === 'error' ? row.provenance || snapshot : null;
-    return [row.id, row.input, row.response, row.status, row.error, row.elapsedMs ?? '', row.usage?.prompt_tokens ?? '', row.usage?.completion_tokens ?? '', row.usage?.total_tokens ?? '', source?.model ?? '', source?.documentNames?.join('; ') ?? '', source?.systemPrompt ?? '', source?.documentFingerprints ? JSON.stringify(source.documentFingerprints) : '', source?.runAt ?? '', source?.projectId ?? project?.id ?? '', source?.projectName ?? project?.name ?? ''];
+    return [row.id, row.input, row.response, row.status, row.error, row.elapsedMs ?? '', row.usage?.prompt_tokens ?? '', row.usage?.completion_tokens ?? '', row.usage?.total_tokens ?? '', source?.model ?? '', source?.documentNames?.join('; ') ?? '', source?.systemPrompt ?? '', source?.documentFingerprints ? JSON.stringify(source.documentFingerprints) : '', source?.runAt ?? '', source?.projectId ?? project?.id ?? '', source?.projectName ?? project?.name ?? '', source ? source.outputTokens ?? 1024 : ''];
   });
   return '\uFEFF' + [header, ...data].map(row => row.map(value => csvCell(value ?? '')).join(',')).join('\r\n');
 }

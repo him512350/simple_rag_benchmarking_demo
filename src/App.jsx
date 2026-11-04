@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { resultMetadata } from '../lib/result-metadata.js';
 import { LIMITS, utf8Bytes } from '../lib/limits.js';
 import { rowsFromCSV, resultsCSV } from './csv.js';
 import { extractPDF } from './pdf.js';
 import { uploadPresigned } from '@vercel/blob/client';
 import { SAMPLE_PROMPT, SAMPLE_ROWS } from './sample.js';
 
-const queued = row => ({ id: row.id, input: row.input, provenance: null, adminSaved: false, status: 'queued', response: '', error: '', elapsedMs: null, usage: null, truncated: false });
+const queued = row => ({ id: row.id, input: row.input, provenance: null, adminSaved: false, status: 'queued', response: '', error: '', elapsedMs: null, usage: null, truncated: false, finishReason: null });
 async function textHash(text) { return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))), value => value.toString(16).padStart(2, '0')).join(''); }
 const urlProject = () => new URL(location.href).searchParams.get('project') || 'default';
 function OpenIcon({ expand = false }) {
@@ -14,7 +15,7 @@ function OpenIcon({ expand = false }) {
 async function readResponse(response) {
   let data;
   try { data = await response.json(); } catch { throw new Error('The server returned an invalid response. Try again.'); }
-  if (!response.ok) throw new Error(data.error || 'The request failed. Try again.');
+  if (!response.ok) { const error = new Error(data.error || 'The request failed. Try again.'); if (data.result) error.result = resultMetadata(data.result); throw error; }
   return data;
 }
 
@@ -216,7 +217,7 @@ export default function App() {
         }
         prepared.push({ pathname, name: doc.name, selected: doc.selected });
       }
-      const savedRows = rows.map(({ id, input, status, response, error, elapsedMs, usage, truncated, provenance }) => ({ id, input, status, response, error, elapsedMs, usage, truncated, provenance }));
+      const savedRows = rows.map(({ id, input, status, response, error, elapsedMs, usage, truncated, finishReason, provenance }) => ({ id, input, status, response, error, elapsedMs, usage, truncated, finishReason, provenance }));
       const saveBody = { action: 'save', projectId: project.id, systemPrompt: prompt, documents: prepared, rows: savedRows };
       if (utf8Bytes(JSON.stringify(saveBody)) > LIMITS.defaultsBytes) throw new Error('Project data exceeds the 3 MiB limit. Save fewer or shorter results.');
       const result = await readResponse(await fetch('/api/defaults', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(saveBody) }));
@@ -234,7 +235,7 @@ export default function App() {
   async function runQueue(list, reset = false) {
     if (active.current || locked) return;
     const sequence = loadSequence.current;
-    const runSnapshot = { projectId: project.id, projectName: project.name, model, systemPrompt: prompt, documentNames: selected.map(doc => doc.name), documentFingerprints: selected.map(doc => ({ name: doc.name, sha256: doc.sha256, pathname: doc.pathname ?? null })), documents: selected.map(({ name, text }) => ({ name, text })) };
+    const runSnapshot = { outputTokens: LIMITS.outputTokens, projectId: project.id, projectName: project.name, model, systemPrompt: prompt, documentNames: selected.map(doc => doc.name), documentFingerprints: selected.map(doc => ({ name: doc.name, sha256: doc.sha256, pathname: doc.pathname ?? null })), documents: selected.map(({ name, text }) => ({ name, text })) };
     try {
       if (!model || connectionError) throw new Error('Connect OpenRouter and select a model before running.');
       if (!prompt.trim() || prompt.length > LIMITS.systemChars) throw new Error('Write a system prompt of 1–12,000 characters.');
@@ -255,9 +256,11 @@ export default function App() {
         patchRow(row.id, { ...queued(row), status: 'running', provenance }, sequence);
         try {
           const data = await readResponse(await fetch('/api/benchmark', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: runSnapshot.model, systemPrompt: runSnapshot.systemPrompt, question: row.input, documents: runSnapshot.documents }), signal: controller.signal }));
-          patchRow(row.id, { status: 'done', response: data.response, elapsedMs: data.elapsedMs, usage: data.usage, truncated: data.truncated }, sequence);
+          const details = resultMetadata(data);
+          patchRow(row.id, { status: 'done', response: data.response, ...details, provenance: { ...provenance, outputTokens: details.outputTokens ?? provenance.outputTokens } }, sequence);
         } catch (error) {
-          patchRow(row.id, controller.signal.aborted ? queued(row) : { status: 'error', error: error.message.slice(0, LIMITS.errorChars) }, sequence);
+          const details = error.result ? resultMetadata(error.result) : {};
+          patchRow(row.id, controller.signal.aborted ? queued(row) : { status: 'error', error: error.message.slice(0, LIMITS.errorChars), ...details, provenance: { ...provenance, outputTokens: details.outputTokens ?? provenance.outputTokens } }, sequence);
         } finally { controllers.current.delete(controller); }
       }
     }
@@ -285,9 +288,9 @@ export default function App() {
     <section className="panel" aria-labelledby="casesLabel"><div className="panel-h"><span className="label" id="casesLabel">Benchmark cases {isSample && <span className="sample-tag" id="sampleTag">Sample data</span>}</span><span className="meta" id="fileMeta">{fileMeta}</span></div>
       <div className="toolbar"><label className="filebtn" htmlFor="csvInput">Import CSV<input type="file" id="csvInput" accept=".csv,text/csv" disabled={locked} onChange={importCSV} /></label><button className="model-btn" id="modelBtn" disabled={locked} onClick={() => modelDialog.current.showModal()}>Change model · {modelName}</button><span className="spacer" /><button className="primary" id="runBtn" disabled={locked || modelsLoading || !model || !!connectionError || !rows.length} onClick={() => runQueue(rows, true)}>Run all</button><button id="stopBtn" disabled={!running} onClick={stop}>Stop</button><button id="exportBtn" disabled={locked || !rows.some(row => row.status === 'done' || row.status === 'error')} onClick={exportResults}>Export results</button></div>
       {(modelsLoading || connectionError) && <div className={`notice connection${connectionError ? ' err' : ''}`} role="status">{modelsLoading ? 'Loading OpenRouter models…' : connectionError} {!modelsLoading && <button disabled={locked} onClick={loadModels}>Retry connection</button>}</div>}
-      <div className="notice context" id="contextSummary" aria-live="polite">{model || 'No model selected'} · {selected.length} document(s): {selected.map(doc => doc.name).join(', ') || 'None (prompt only)'}</div><div className="bar"><i id="progress" style={{ width: `${rows.length ? (done + errors) / rows.length * 100 : 0}%` }} /></div><div className="stats" id="stats"><span>Cases <b>{rows.length}</b></span><span>Completed <b>{done}/{rows.length}</b></span>{errors > 0 && <span>Errors <b>{errors}</b></span>}<span>Output cap <b>1,024 tokens</b></span></div>
+      <div className="notice context" id="contextSummary" aria-live="polite">{model || 'No model selected'} · {selected.length} document(s): {selected.map(doc => doc.name).join(', ') || 'None (prompt only)'}</div><div className="bar"><i id="progress" style={{ width: `${rows.length ? (done + errors) / rows.length * 100 : 0}%` }} /></div><div className="stats" id="stats"><span>Cases <b>{rows.length}</b></span><span>Completed <b>{done}/{rows.length}</b></span>{errors > 0 && <span>Errors <b>{errors}</b></span>}<span>New run output cap <b>{LIMITS.outputTokens.toLocaleString()} tokens</b></span></div>
       {notice.text && <div className={`notice${notice.error ? ' err' : ''}`} id="notice" role="status">{notice.text}</div>}
-      <div className="tablewrap"><table><thead><tr>{['ID', 'Input', 'Response', 'Status', 'Time / tokens', ''].map((heading, i) => <th key={i}>{heading}</th>)}</tr></thead><tbody id="rows">{rows.map(row => <tr key={row.id}><td className="id">{row.id}</td><td className="txt">{row.input}</td><td className="resp"><div className={`resp-box${!row.response ? ' dim' : ''}`}>{row.adminSaved && <div className="meta historical">Admin-saved · {row.provenance?.model}</div>}{row.response || (row.status === 'running' ? 'Waiting for model…' : row.status === 'error' ? 'No response' : 'Not run yet')}</div>{row.truncated && <div className="meta">Output reached the token cap.</div>}</td><td><span className={`chip ${row.status}`}>{{ queued: 'Queued', running: 'Running', done: 'Done', error: 'Error' }[row.status]}</span>{row.error && <div className="meta document-error">{row.error}</div>}</td><td className="metrics">{row.elapsedMs == null ? '—' : `${(row.elapsedMs / 1000).toFixed(2)} s`}<br />{row.usage?.total_tokens == null ? '— tokens' : `${row.usage.total_tokens} tokens`}<div className="meta">In {row.usage?.prompt_tokens ?? '—'} / Out {row.usage?.completion_tokens ?? '—'}</div></td><td className="act"><button disabled={locked || !model || !!connectionError} onClick={() => runQueue([row])}>{row.status === 'queued' ? 'Run' : 'Retry'}</button></td></tr>)}</tbody></table></div>
+      <div className="tablewrap"><table><thead><tr>{['ID', 'Input', 'Response', 'Status', 'Time / tokens', ''].map((heading, i) => <th key={i}>{heading}</th>)}</tr></thead><tbody id="rows">{rows.map(row => <tr key={row.id}><td className="id">{row.id}</td><td className="txt">{row.input}</td><td className="resp"><div className={`resp-box${!row.response ? ' dim' : ''}`}>{row.adminSaved && <div className="meta historical">Admin-saved · {row.provenance?.model}</div>}{row.response || (row.status === 'running' ? 'Waiting for model…' : row.status === 'error' ? 'No response' : 'Not run yet')}</div>{row.truncated && <div className="meta">Output limit reached. The answer may be incomplete. Retry to try again. Limit: {(row.provenance?.outputTokens ?? 1024).toLocaleString()} tokens.</div>}</td><td><span className={`chip ${row.status}`}>{{ queued: 'Queued', running: 'Running', done: 'Done', error: 'Error' }[row.status]}</span>{row.error && <div className="meta document-error">{row.error}</div>}</td><td className="metrics">{row.elapsedMs == null ? '—' : `${(row.elapsedMs / 1000).toFixed(2)} s`}<br />{row.usage?.total_tokens == null ? '— tokens' : `${row.usage.total_tokens} tokens`}<div className="meta">In {row.usage?.prompt_tokens ?? '—'} / Out {row.usage?.completion_tokens ?? '—'}</div>{row.provenance && <div className="meta">Limit {(row.provenance.outputTokens ?? 1024).toLocaleString()}</div>}</td><td className="act"><button disabled={locked || !model || !!connectionError} onClick={() => runQueue([row])}>{row.status === 'queued' ? 'Run' : 'Retry'}</button></td></tr>)}</tbody></table></div>
       <div className="help">CSV needs one column named <code>input</code>, with one question per row. Maximum 50 questions, 4,000 characters each, and a 1 MB CSV. No automatic scoring. Selected document text and questions are sent to OpenRouter when you run.</div>
     </section></div>
     <dialog id="createProjectDialog" ref={createDialog} aria-labelledby="createProjectTitle"><h2 id="createProjectTitle">New project</h2><p className="sub">Start with the sample prompt and questions, without documents or results.</p><form className="login-form" onSubmit={createProject}><label>Project name<input name="name" maxLength={80} required disabled={creating} /></label>{createError && <p className="document-error" role="alert">{createError}</p>}<button className="primary" disabled={creating}>{creating ? 'Creating…' : 'Create project'}</button></form><form method="dialog"><button disabled={creating}>Close</button></form></dialog>

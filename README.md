@@ -34,7 +34,7 @@ Use Vercel Deployment Protection and set an OpenRouter key spending limit before
 - The document icon opens the original PDF in a separate tab. Selecting documents and reading them are separate actions. Remove documents to free space in the current session.
 - The system prompt can be expanded into a larger editor. Edits sync automatically within this page. On each visit or refresh, the selected project’s saved prompt, PDF library, benchmark cases, and results are loaded. Guest changes are temporary; no data is read from or written to local storage. Admins explicitly save project data. The current project is selected with the URL’s `project` query parameter; model selection is not persisted.
 - Run all or retry one case. Stop prevents queued cases from starting and aborts active browser requests. A provider may already have accepted a request and may still bill for it. Stopped cases return to queued. Changing model, prompt, or documents clears previous results. Each case captures its own model, prompt, document names and text hashes, and run date. Retrying one case does not change the historical source of other cases. Loaded results are marked **Admin-saved** and show their original model ID, even if that model is no longer available.
-- Export includes answers, status/error, elapsed milliseconds, token usage, each row’s original model ID, document names and SHA-256 fingerprints, full run prompt, run date, and project ID/name. Missing provider usage stays empty rather than becoming zero. Token-cap truncation is identified in the response table.
+- Export includes answers, status/error, elapsed milliseconds, token usage, each row’s original model ID, document names and SHA-256 fingerprints, full run prompt, run date, and project ID/name. Missing provider usage stays empty rather than becoming zero. When a model reaches the output limit, partial text stays visible with a warning and a manual Retry action. If the limit is reached before any answer text arrives, the case shows an explicit error while preserving available time, token usage, and finish reason. The app does not retry automatically or change the model’s reasoning settings. Each row records its actual output limit; older saved rows without this field retain their original 1,024-token limit, while new requests use 4,096. CSV exports include `output_limit`.
 
 ## Fixed limits
 
@@ -50,7 +50,7 @@ Use Vercel Deployment Protection and set an OpenRouter key spending limit before
 | Saved answer / error | 32,000 / 2,000 characters per case |
 | Projects | 50, including Default; names are fixed at creation |
 | Storage listing | 10,000 entries / 100 pages per operation; excess is an explicit error |
-| Model output | 1,024 tokens per case |
+| Model output | 4,096 tokens per new case |
 
 Scanned, password-protected, damaged PDFs, and **any PDF containing a page without selectable text (including blank pages)** are rejected. PDF extraction captures text, not page layout, tables, or images. Documents are not silently truncated. The model context check uses UTF-8 bytes plus an output reserve and message overhead as a conservative token upper bound; it is not a precise tokenizer and can reject content that a model might otherwise fit. Provider-specific model restrictions can still cause an individual case to fail.
 
@@ -62,7 +62,7 @@ The original standalone design is preserved in `Prompt Bench.html` as a historic
 
 `npm test` covers API validation, fixed upstream requests, secret handling, metadata filtering/caching, output limits, context limits, cancellation, and CSV parsing/export. Browser checks use mocked OpenRouter responses when no server key is available; those checks do not establish live provider accuracy or performance. No production deployment is required to build or test locally.
 
-Verified with Node.js 24: 33 automated tests and the production build pass. Chrome browser checks covered English and Chinese PDF text extraction, multiple selected documents, file/page/text limits, CSV import, cancellation with two active requests, retries and provider errors, token display/truncation, full-prompt/document attribution in exports, and 320/390/920/1440-pixel layouts. The model dialog was also checked with over 400 real model metadata entries. Completion responses and reported durations in these browser checks were mocked: no paid/live completion was performed.
+Verified with Node.js 24: 38 automated tests and the production build pass. Chrome browser checks covered English and Chinese PDF text extraction, multiple selected documents, file/page/text limits, CSV import, cancellation with two active requests, retries and provider errors, token display/truncation, full-prompt/document attribution in exports, and 320/390/920/1440-pixel layouts. The model dialog was also checked with over 400 real model metadata entries. Completion responses and reported durations in these browser checks were mocked: no paid/live completion was performed.
 
 ## Shared defaults and admin login
 
