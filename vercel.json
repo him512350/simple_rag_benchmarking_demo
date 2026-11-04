@@ -7,11 +7,7 @@
     },
     "api/defaults.js": {
       "maxDuration": 60,
-      "includeFiles": [
-        "node_modules/pdfjs-dist/legacy/build/pdf.mjs",
-        "node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs",
-        "node_modules/@napi-rs/canvas*/**"
-      ]
+      "includeFiles": "node_modules/{pdfjs-dist/legacy/build/{pdf,pdf.worker}.mjs,@napi-rs/canvas*/**}"
     }
   }
 }

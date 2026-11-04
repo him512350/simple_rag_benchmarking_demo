@@ -54,3 +54,17 @@ test('production API entrypoints import as ESM and use the shared handlers', asy
   const config = JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../vercel.json', import.meta.url), 'utf8'));
   assert.equal(config.framework, 'vite'); assert.equal(config.functions['api/benchmark.js'].maxDuration, 60);
 });
+
+test('Vercel defaults function glob packages PDF parser, worker and native canvas runtime', async () => {
+  const { readFileSync, globSync } = await import('node:fs');
+  const config = JSON.parse(readFileSync(new URL('../vercel.json', import.meta.url), 'utf8'));
+  const pattern = config.functions['api/defaults.js'].includeFiles;
+  // https://openapi.vercel.sh/vercel.json requires one glob string.
+  assert.equal(typeof pattern, 'string', 'Vercel functions schema requires a single glob string');
+  assert.ok(pattern.length <= 256);
+  const files = globSync(pattern);
+  assert.ok(files.includes('node_modules/pdfjs-dist/legacy/build/pdf.mjs'));
+  assert.ok(files.includes('node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs'));
+  assert.ok(files.some(file => file.startsWith('node_modules/@napi-rs/canvas/') && file.endsWith('.js')));
+  assert.ok(files.some(file => file.startsWith('node_modules/@napi-rs/canvas-') && file.endsWith('.node')));
+});

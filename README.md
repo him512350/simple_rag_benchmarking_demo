@@ -58,7 +58,7 @@ The original standalone design is preserved in `Prompt Bench.html` as a historic
 
 `npm test` covers API validation, fixed upstream requests, secret handling, metadata filtering/caching, output limits, context limits, cancellation, and CSV parsing/export. Browser checks use mocked OpenRouter responses when no server key is available; those checks do not establish live provider accuracy or performance. No production deployment is required to build or test locally.
 
-Verified with Node.js 24: 23 automated tests and the production build pass. Chrome browser checks covered English and Chinese PDF text extraction, multiple selected documents, file/page/text limits, CSV import, cancellation with two active requests, retries and provider errors, token display/truncation, full-prompt/document attribution in exports, and 320/390/920/1440-pixel layouts. The model dialog was also checked with over 400 real model metadata entries. Completion responses and reported durations in these browser checks were mocked: no paid/live completion request or deployed Vercel execution was performed.
+Verified with Node.js 24: 24 automated tests and the production build pass. Chrome browser checks covered English and Chinese PDF text extraction, multiple selected documents, file/page/text limits, CSV import, cancellation with two active requests, retries and provider errors, token display/truncation, full-prompt/document attribution in exports, and 320/390/920/1440-pixel layouts. The model dialog was also checked with over 400 real model metadata entries. Completion responses and reported durations in these browser checks were mocked: no paid/live completion request or deployed Vercel execution was performed.
 
 ## Shared defaults and admin login
 
