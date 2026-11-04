@@ -151,9 +151,9 @@ export default function App() {
   useEffect(() => { loadModels(); loadDefaults(urlProject()); checkSession(); const navigate = () => switchProject(urlProject(), false); window.addEventListener('popstate', navigate); return () => { loadController.current?.abort(); window.removeEventListener('popstate', navigate); }; }, []);
   useEffect(() => () => { controllers.current.forEach(controller => controller.abort()); }, []);
 
-  function resetResults() { setSaveStatus(''); setRows(current => current.map(queued)); setSnapshot(null); setNotice({ text: '', error: false }); }
+  function settingsChanged() { setSaveStatus(''); }
   function changePrompt(value) {
-    setPrompt(value); resetResults();
+    setPrompt(value); settingsChanged();
     setSaveStatus('');
   }
   function report(error) { setNotice({ text: error.message, error: true }); }
@@ -188,17 +188,17 @@ export default function App() {
       }
       if (selectedChars + added.reduce((count, doc) => count + doc.text.length, 0) > LIMITS.contextChars) throw new Error('Selected PDF text exceeds 60,000 characters. Deselect a document before uploading more.');
       setDocuments(current => [...current, ...added.map(doc => ({ ...doc, id: crypto.randomUUID(), url: URL.createObjectURL(doc.file.slice(0, doc.file.size, 'application/pdf')) }))]);
-      setDocNotice(`${added.length} PDF(s) ready. Full text is sent only when you run a benchmark.`); resetResults();
+      setDocNotice(`${added.length} PDF(s) ready. Full text is sent only when you run a benchmark.`); settingsChanged();
     } catch (error) { if (sequence === loadSequence.current) report(new Error(`Upload failed: ${error.message}`)); }
     finally { if (sequence === loadSequence.current) setImporting(false); }
   }
   function toggleDocument(doc, checked) {
     if (checked && selectedChars + doc.text.length > LIMITS.contextChars) return report(new Error('Selected documents must total at most 60,000 characters. Deselect another document first.'));
-    setDocuments(current => current.map(item => item.id === doc.id ? { ...item, selected: checked } : item)); resetResults();
+    setDocuments(current => current.map(item => item.id === doc.id ? { ...item, selected: checked } : item)); settingsChanged();
   }
   function removeDocument(doc) {
     if (!authenticated || locked) return;
-    setDocuments(current => current.filter(item => item.id !== doc.id)); if (doc.url.startsWith('blob:')) URL.revokeObjectURL(doc.url); resetResults();
+    setDocuments(current => current.filter(item => item.id !== doc.id)); if (doc.url.startsWith('blob:')) URL.revokeObjectURL(doc.url); settingsChanged();
   }
   async function deleteProject() {
     if (!authenticated || locked || !project) return;
@@ -323,6 +323,6 @@ export default function App() {
     <dialog id="createProjectDialog" ref={createDialog} aria-labelledby="createProjectTitle"><h2 id="createProjectTitle">New project</h2><p className="sub">Start with a customer service prompt and no questions, documents or results.</p><form className="login-form" onSubmit={createProject}><label>Project name<input name="name" maxLength={80} required disabled={creating} /></label>{createError && <p className="document-error" role="alert">{createError}</p>}<button className="primary" disabled={creating}>{creating ? 'Creating…' : 'Create project'}</button></form><form method="dialog"><button disabled={creating}>Close</button></form></dialog>
     <dialog id="loginDialog" ref={loginDialog} aria-labelledby="loginTitle"><h2 id="loginTitle">Admin login</h2><p className="sub">Log in to create projects and save their prompts, documents, cases, and results.</p><form className="login-form" onSubmit={login}><label>Username<input name="username" autoComplete="username" required disabled={authBusy} /></label><label>Password<input name="password" type="password" autoComplete="current-password" required disabled={authBusy} /></label>{authError && <p className="document-error" role="alert">{authError}</p>}<button className="primary" disabled={authBusy}>{authBusy ? 'Logging in…' : 'Log in'}</button></form><form method="dialog"><button disabled={authBusy}>Close</button></form></dialog>
     <dialog id="promptDialog" ref={promptDialog} aria-labelledby="expandedPromptTitle" aria-describedby="expandedPromptHelp"><div className="expanded-prompt-layout"><div><h2 id="expandedPromptTitle">System prompt</h2><p className="sub" id="expandedPromptHelp">Changes sync automatically. Maximum 12,000 characters.</p></div><textarea id="expandedPrompt" ref={expandedPrompt} spellCheck="false" aria-labelledby="expandedPromptTitle" value={prompt} disabled={locked} onChange={event => changePrompt(event.target.value)} /><form method="dialog"><button>Close</button></form></div></dialog>
-    <dialog id="modelDialog" ref={modelDialog} aria-labelledby="modelTitle"><h2 id="modelTitle">Choose a model</h2><p className="sub">Text models available through OpenRouter. Usage is billed to the server account.</p><input className="model-search" aria-label="Search models" placeholder="Search name or model ID" value={search} onChange={event => setSearch(event.target.value)} /><div className="model-options" id="modelOptions">{models.filter(item => `${item.name} ${item.id}`.toLowerCase().includes(search.toLowerCase())).map(item => <button key={item.id} aria-pressed={model === item.id} onClick={() => { if (item.id !== model) { setModel(item.id); resetResults(); } modelDialog.current.close(); }}>{item.name}<small className="meta">{item.id} · {item.contextLength.toLocaleString()} context</small></button>)}{!modelsLoading && !models.length && <p className="sub">{connectionError || 'No models available.'}</p>}</div><form method="dialog"><button>Close</button></form></dialog>
+    <dialog id="modelDialog" ref={modelDialog} aria-labelledby="modelTitle"><h2 id="modelTitle">Choose a model</h2><p className="sub">Text models available through OpenRouter. Usage is billed to the server account.</p><input className="model-search" aria-label="Search models" placeholder="Search name or model ID" value={search} onChange={event => setSearch(event.target.value)} /><div className="model-options" id="modelOptions">{models.filter(item => `${item.name} ${item.id}`.toLowerCase().includes(search.toLowerCase())).map(item => <button key={item.id} aria-pressed={model === item.id} onClick={() => { if (item.id !== model) { setModel(item.id); settingsChanged(); } modelDialog.current.close(); }}>{item.name}<small className="meta">{item.id} · {item.contextLength.toLocaleString()} context</small></button>)}{!modelsLoading && !models.length && <p className="sub">{connectionError || 'No models available.'}</p>}</div><form method="dialog"><button>Close</button></form></dialog>
   </div>;
 }
