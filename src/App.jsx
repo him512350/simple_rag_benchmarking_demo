@@ -64,14 +64,14 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState('');
   const loginDialog = useRef(null);
-  const stopRequested = useRef(false);
-  const active = useRef(false);
-  const controllers = useRef(new Set());
+  const controllers = useRef(new Map());
+  const attempts = useRef(new Map());
   const promptDialog = useRef(null);
   const expandedPrompt = useRef(null);
   const modelDialog = useRef(null);
   const busy = running || importing || saving || creating || deleting || defaultsLoading;
   const locked = busy || !defaultsReady || !project;
+  const runLocked = importing || saving || creating || deleting || defaultsLoading || !defaultsReady || !project;
   documentsRef.current = documents;
   const selected = documents.filter(doc => doc.selected);
   const selectedChars = selected.reduce((count, doc) => count + doc.text.length, 0);
@@ -92,7 +92,7 @@ export default function App() {
   async function loadDefaults(id = projectId) {
     const sequence = ++loadSequence.current;
     loadController.current?.abort(); const controller = new AbortController(); loadController.current = controller;
-    stopRequested.current = true; controllers.current.forEach(item => item.abort()); active.current = false; setRunning(false);
+    controllers.current.forEach(item => item.controller.abort()); controllers.current.clear(); attempts.current.clear(); setRunning(false);
     setImporting(false); setSaving(false); setCreating(false); setDeleting(false);
     promptDialog.current?.close(); createDialog.current?.close();
     documentsRef.current.forEach(doc => { if (doc.url.startsWith('blob:')) URL.revokeObjectURL(doc.url); });
@@ -149,7 +149,7 @@ export default function App() {
     finally { setAuthReady(true); }
   }
   useEffect(() => { loadModels(); loadDefaults(urlProject()); checkSession(); const navigate = () => switchProject(urlProject(), false); window.addEventListener('popstate', navigate); return () => { loadController.current?.abort(); window.removeEventListener('popstate', navigate); }; }, []);
-  useEffect(() => () => { controllers.current.forEach(controller => controller.abort()); }, []);
+  useEffect(() => () => { controllers.current.forEach(item => item.controller.abort()); controllers.current.clear(); attempts.current.clear(); }, []);
 
   function settingsChanged() { setSaveStatus(''); }
   function changePrompt(value) {
@@ -168,7 +168,7 @@ export default function App() {
       if (file.size > (extension === 'csv' ? LIMITS.csvBytes : LIMITS.xlsxBytes)) throw new Error(extension === 'csv' ? 'CSV must be 1 MiB or smaller.' : 'XLSX must be 5 MiB or smaller.');
       const data = extension === 'csv' ? rowsFromCSV(await file.text()) : await (await import('./xlsx-import.js')).readXLSXFile(file);
       if (sequence !== loadSequence.current) return;
-      setRows(data.map(queued)); setSnapshot(null); setIsSample(false);
+      attempts.current.clear(); setRows(data.map(queued)); setSnapshot(null); setIsSample(false);
       setFileMeta(`${file.name} · ${data.length} cases`); setNotice({ text: '', error: false });
     } catch (error) { if (sequence === loadSequence.current) report(error); }
     finally { if (sequence === loadSequence.current) setImporting(false); }
@@ -258,9 +258,11 @@ export default function App() {
     } catch (error) { if (sequence === loadSequence.current) { setSaveStatus(`Save failed: ${error.message} Your edits are still here. Retry or reload to check the latest saved version.`); await checkSession(); } }
     finally { if (sequence === loadSequence.current) setSaving(false); }
   }
-  function patchRow(id, patch, sequence) { if (sequence !== loadSequence.current) return; setRows(current => current.map(row => row.id === id ? { ...row, ...patch } : row)); }
-  async function runQueue(list, reset = false) {
-    if (active.current || locked) return;
+  function patchRow(id, patch, sequence, attempt) { setRows(current => sequence !== loadSequence.current || attempts.current.get(id) !== attempt ? current : current.map(row => row.id === id ? { ...row, ...patch } : row)); }
+  async function runQueue(list) {
+    if (runLocked) return;
+    list = list.filter(row => !controllers.current.has(row.id));
+    if (!list.length) return;
     const sequence = loadSequence.current;
     const runSnapshot = { outputTokens: LIMITS.outputTokens, projectId: project.id, projectName: project.name, model, systemPrompt: prompt, documentNames: selected.map(doc => doc.name), documentFingerprints: selected.map(doc => ({ name: doc.name, sha256: doc.sha256, pathname: doc.pathname ?? null })), documents: selected.map(({ name, text }) => ({ name, text })) };
     try {
@@ -272,31 +274,38 @@ export default function App() {
         if (utf8Bytes(JSON.stringify({ model, systemPrompt: prompt, question: row.input, documents: runSnapshot.documents })) > LIMITS.requestBytes) throw new Error('The prompt, question, and documents exceed the 2 MiB request limit. Select less text.');
       }
     } catch (error) { report(error); return; }
-    active.current = true; stopRequested.current = false; setRunning(true); setSnapshot(runSnapshot); setNotice({ text: '', error: false });
-    if (reset) setRows(current => current.map(queued));
-    let next = 0;
-    async function worker() {
-      while (next < list.length && !stopRequested.current && sequence === loadSequence.current) {
-        const row = list[next++]; const controller = new AbortController(); controllers.current.add(controller);
-        const { documents: ignored, ...source } = runSnapshot;
-        const provenance = { ...source, runAt: new Date().toISOString() };
-        patchRow(row.id, { ...queued(row), status: 'running', provenance }, sequence);
-        try {
-          const data = await readResponse(await fetch('/api/benchmark', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: runSnapshot.model, systemPrompt: runSnapshot.systemPrompt, question: row.input, documents: runSnapshot.documents }), signal: controller.signal }));
-          const details = resultMetadata(data);
-          patchRow(row.id, { status: 'done', response: data.response, ...details, provenance: { ...provenance, outputTokens: details.outputTokens ?? provenance.outputTokens } }, sequence);
-        } catch (error) {
-          const details = error.result ? resultMetadata(error.result) : {};
-          patchRow(row.id, controller.signal.aborted ? queued(row) : { status: 'error', error: error.message.slice(0, LIMITS.errorChars), ...details, provenance: { ...provenance, outputTokens: details.outputTokens ?? provenance.outputTokens } }, sequence);
-        } finally { controllers.current.delete(controller); }
+    setSnapshot(runSnapshot); setNotice({ text: '', error: false });
+    await Promise.all(list.map(async row => {
+      const controller = new AbortController();
+      const entry = { controller, sequence, row };
+      controllers.current.set(row.id, entry); attempts.current.set(row.id, entry); setRunning(true);
+      const current = () => sequence === loadSequence.current && attempts.current.get(row.id) === entry;
+      const { documents: ignored, ...source } = runSnapshot;
+      const provenance = { ...source, runAt: new Date().toISOString() };
+      patchRow(row.id, { ...queued(row), status: 'running', provenance }, sequence, entry);
+      try {
+        const data = await readResponse(await fetch('/api/benchmark', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: runSnapshot.model, systemPrompt: runSnapshot.systemPrompt, question: row.input, documents: runSnapshot.documents }), signal: controller.signal }));
+        if (!current()) return;
+        const details = resultMetadata(data);
+        patchRow(row.id, { status: 'done', response: data.response, ...details, provenance: { ...provenance, outputTokens: details.outputTokens ?? provenance.outputTokens } }, sequence, entry);
+      } catch (error) {
+        if (!current()) return;
+        const details = error.result ? resultMetadata(error.result) : {};
+        patchRow(row.id, controller.signal.aborted ? queued(row) : { status: 'error', error: error.message.slice(0, LIMITS.errorChars), ...details, provenance: { ...provenance, outputTokens: details.outputTokens ?? provenance.outputTokens } }, sequence, entry);
+      } finally {
+        if (current()) {
+          controllers.current.delete(row.id); setRunning(controllers.current.size > 0);
+          if (!controllers.current.size) setNotice({ text: 'Benchmark finished. Review responses and usage below.', error: false });
+        }
       }
-    }
-    await Promise.all(Array.from({ length: Math.min(1, list.length) }, worker));
-    if (sequence !== loadSequence.current) return;
-    active.current = false; setRunning(false);
-    setNotice({ text: stopRequested.current ? 'Stopped. Unfinished cases remain queued. Requests already accepted by a provider may still be billed.' : 'Benchmark finished. Review responses and usage below.', error: false });
+    }));
   }
-  function stop() { stopRequested.current = true; controllers.current.forEach(controller => controller.abort()); }
+  function stop() {
+    const entries = [...controllers.current.values()]; controllers.current.clear();
+    entries.forEach(({ controller, row, sequence }) => { const stopped = {}; attempts.current.set(row.id, stopped); controller.abort(); patchRow(row.id, queued(row), sequence, stopped); });
+    setRunning(false);
+    setNotice({ text: 'Stopped. Unfinished cases remain queued. Requests already accepted by a provider may still be billed.', error: false });
+  }
   function exportResults() {
     const url = URL.createObjectURL(new Blob([resultsCSV(rows, snapshot, project)], { type: 'text/csv;charset=utf-8' }));
     const link = document.createElement('a'); link.href = url; link.download = 'benchmark-results.csv'; link.click();
@@ -313,11 +322,11 @@ export default function App() {
       <section className="panel" aria-labelledby="knowledgeLabel"><div className="panel-h"><span className="label" id="knowledgeLabel">Knowledge base</span><span className="chip">{authenticated ? 'Save to share' : 'Shared defaults + your edits'}</span></div><div className="knowledge-body"><p className="sub">{authenticated ? 'Upload text-based PDFs: up to 5 MB and 10 pages each. Selected full text is used for every question.' : 'Select the PDFs to include as knowledge for this benchmark.'}</p>{authenticated && <label className="filebtn" htmlFor="docInput">Upload PDFs<input type="file" id="docInput" multiple accept=".pdf,application/pdf" disabled={locked} onChange={uploadDocuments} /></label>}<div id="documents">{documents.map(doc => <div className="document" key={doc.id}><label className="document-label"><input type="checkbox" checked={doc.selected} disabled={locked} onChange={event => toggleDocument(doc, event.target.checked)} /><span>{doc.name}<small>{doc.pages} page(s) · {doc.text.length.toLocaleString()} chars</small></span></label><div className="document-actions"><a className="document-open" href={doc.url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${doc.name} in a new tab`} title={`Open ${doc.name} in a new tab`}><OpenIcon /></a>{authenticated && <button className="remove-document" disabled={locked} onClick={() => removeDocument(doc)} aria-label={`Remove ${doc.name}`}>Remove</button>}</div></div>)}</div>{!documents.length && <p className="sub">{project ? 'No documents yet. You can run with the system prompt alone.' : 'Select or create a project to begin.'}</p>}<p className="sub upload-notice" id="docNotice" role="status">{authenticated ? importing ? 'Reading file…' : docNotice : 'Your selections apply to this page only. Refresh restores the saved project.'}</p><p className="meta">{selectedChars.toLocaleString()} / 60,000 selected characters{authenticated && ' · Up to 10 PDFs. Scans and blank pages are not supported.'}</p></div></section>
     </div>
     <section className="panel" aria-labelledby="casesLabel"><div className="panel-h"><span className="label" id="casesLabel">Benchmark cases {isSample && <span className="sample-tag" id="sampleTag">Sample data</span>}</span><span className="meta" id="fileMeta">{fileMeta}</span></div>
-      <div className="toolbar"><label className="filebtn" htmlFor="csvInput">Import CSV/ XLSX<input type="file" id="csvInput" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={locked} onChange={importCases} /></label><button className="model-btn" id="modelBtn" disabled={locked} onClick={() => modelDialog.current.showModal()}>Change model · {modelName}</button><span className="spacer" /><button className="primary" id="runBtn" disabled={locked || modelsLoading || !model || !!connectionError || !rows.length} onClick={() => runQueue(rows, true)}>Run all</button><button id="stopBtn" disabled={!running} onClick={stop}>Stop</button><button id="exportBtn" disabled={locked || !rows.some(row => row.status === 'done' || row.status === 'error')} onClick={exportResults}>Export results</button></div>
+      <div className="toolbar"><label className="filebtn" htmlFor="csvInput">Import CSV/ XLSX<input type="file" id="csvInput" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={locked} onChange={importCases} /></label><button className="model-btn" id="modelBtn" disabled={locked} onClick={() => modelDialog.current.showModal()}>Change model · {modelName}</button><span className="spacer" /><button className="primary" id="runBtn" disabled={runLocked || modelsLoading || !model || !!connectionError || !rows.some(row => row.status !== 'running')} onClick={() => runQueue(rows)}>Run all</button><button id="stopBtn" disabled={!running} onClick={stop}>Stop</button><button id="exportBtn" disabled={locked || !rows.some(row => row.status === 'done' || row.status === 'error')} onClick={exportResults}>Export results</button></div>
       {(modelsLoading || connectionError) && <div className={`notice connection${connectionError ? ' err' : ''}`} role="status">{modelsLoading ? 'Loading OpenRouter models…' : connectionError} {!modelsLoading && <button disabled={locked} onClick={loadModels}>Retry connection</button>}</div>}
       <div className="notice context" id="contextSummary" aria-live="polite">{model || 'No model selected'} · {selected.length} document(s): {selected.map(doc => doc.name).join(', ') || 'None (prompt only)'}</div><div className="bar"><i id="progress" style={{ width: `${rows.length ? (done + errors) / rows.length * 100 : 0}%` }} /></div><div className="stats" id="stats"><span>Cases <b>{rows.length}</b></span><span>Completed <b>{done}/{rows.length}</b></span>{errors > 0 && <span>Errors <b>{errors}</b></span>}<span>New run output cap <b>{LIMITS.outputTokens.toLocaleString()} tokens</b></span></div>
       {notice.text && <div className={`notice${notice.error ? ' err' : ''}`} id="notice" role="status">{notice.text}</div>}
-      <div className="tablewrap"><table><thead><tr>{['ID', 'Input', 'Response', 'Status', 'Time / tokens', ''].map((heading, i) => <th key={i}>{heading}</th>)}</tr></thead><tbody id="rows">{rows.map(row => <tr key={row.id}><td className="id">{row.id}</td><td className="txt">{row.input}</td><td className="resp"><div className={`resp-box${!row.response ? ' dim' : ''}`}>{row.adminSaved && <div className="meta historical">Admin-saved · {row.provenance?.model}</div>}{row.status === 'running' ? <div className="response-skeleton" role="status" aria-label="Waiting for model response" aria-busy="true"><span className="sr-only">Waiting for model response…</span><span className="skeleton-block skeleton-line" aria-hidden="true" /><span className="skeleton-block skeleton-line" aria-hidden="true" /></div> : row.response || (row.status === 'error' ? 'No response' : 'Not run yet')}</div>{row.truncated && <div className="meta">Output limit reached. The answer may be incomplete. Retry to try again. Limit: {(row.provenance?.outputTokens ?? 1024).toLocaleString()} tokens.</div>}</td><td><span className={`chip ${row.status}`}>{{ queued: 'Queued', running: 'Running', done: 'Done', error: 'Error' }[row.status]}</span>{row.error && <div className="meta document-error">{row.error}</div>}</td><td className="metrics">{row.elapsedMs == null ? '—' : `${(row.elapsedMs / 1000).toFixed(2)} s`}<br />{row.usage?.total_tokens == null ? '— tokens' : `${row.usage.total_tokens} tokens`}<div className="meta">In {row.usage?.prompt_tokens ?? '—'} / Out {row.usage?.completion_tokens ?? '—'}</div>{row.provenance && <div className="meta">Limit {(row.provenance.outputTokens ?? 1024).toLocaleString()}</div>}</td><td className="act"><button disabled={locked || !model || !!connectionError} onClick={() => runQueue([row])}>{row.status === 'queued' ? 'Run' : 'Retry'}</button></td></tr>)}</tbody></table></div>
+      <div className="tablewrap"><table><thead><tr>{['ID', 'Input', 'Response', 'Status', 'Time / tokens', ''].map((heading, i) => <th key={i}>{heading}</th>)}</tr></thead><tbody id="rows">{rows.map(row => <tr key={row.id}><td className="id">{row.id}</td><td className="txt">{row.input}</td><td className="resp"><div className={`resp-box${!row.response ? ' dim' : ''}`}>{row.adminSaved && <div className="meta historical">Admin-saved · {row.provenance?.model}</div>}{row.status === 'running' ? <div className="response-skeleton" role="status" aria-label="Waiting for model response" aria-busy="true"><span className="sr-only">Waiting for model response…</span><span className="skeleton-block skeleton-line" aria-hidden="true" /><span className="skeleton-block skeleton-line" aria-hidden="true" /></div> : row.response || (row.status === 'error' ? 'No response' : 'Not run yet')}</div>{row.truncated && <div className="meta">Output limit reached. The answer may be incomplete. Retry to try again. Limit: {(row.provenance?.outputTokens ?? 1024).toLocaleString()} tokens.</div>}</td><td><span className={`chip ${row.status}`}>{{ queued: 'Queued', running: 'Running', done: 'Done', error: 'Error' }[row.status]}</span>{row.error && <div className="meta document-error">{row.error}</div>}</td><td className="metrics">{row.elapsedMs == null ? '—' : `${(row.elapsedMs / 1000).toFixed(2)} s`}<br />{row.usage?.total_tokens == null ? '— tokens' : `${row.usage.total_tokens} tokens`}<div className="meta">In {row.usage?.prompt_tokens ?? '—'} / Out {row.usage?.completion_tokens ?? '—'}</div>{row.provenance && <div className="meta">Limit {(row.provenance.outputTokens ?? 1024).toLocaleString()}</div>}</td><td className="act"><button disabled={runLocked || modelsLoading || row.status === 'running' || !model || !!connectionError} onClick={() => runQueue([row])}>{row.status === 'queued' ? 'Run' : 'Retry'}</button></td></tr>)}</tbody></table></div>
       <div className="help">CSV or the first XLSX worksheet needs one column named <code>input</code>, with one question per row. Maximum 50 questions, 4,000 characters each. CSV: 1 MiB; XLSX: 5 MiB. Use plain text without formulas or merged input cells.</div>
     </section></div>}
     <dialog id="createProjectDialog" ref={createDialog} aria-labelledby="createProjectTitle"><h2 id="createProjectTitle">New project</h2><p className="sub">Start with a customer service prompt and no questions, documents or results.</p><form className="login-form" onSubmit={createProject}><label>Project name<input name="name" maxLength={80} required disabled={creating} /></label>{createError && <p className="document-error" role="alert">{createError}</p>}<button className="primary" disabled={creating}>{creating ? 'Creating…' : 'Create project'}</button></form><form method="dialog"><button disabled={creating}>Close</button></form></dialog>
