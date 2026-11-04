@@ -8,14 +8,14 @@ import { SAMPLE_PROMPT, SAMPLE_ROWS } from './sample.js';
 
 const queued = row => ({ id: row.id, input: row.input, provenance: null, adminSaved: false, status: 'queued', response: '', error: '', elapsedMs: null, usage: null, truncated: false, finishReason: null });
 async function textHash(text) { return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))), value => value.toString(16).padStart(2, '0')).join(''); }
-const urlProject = () => new URL(location.href).searchParams.get('project') || 'default';
+const urlProject = () => new URL(location.href).searchParams.get('project') || '';
 function OpenIcon({ expand = false }) {
   return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{expand ? <path d="M8 3H3v5M3 3l7 7M16 21h5v-5M21 21l-7-7M16 3h5v5M21 3l-7 7M8 21H3v-5M3 21l7-7" /> : <><path d="M14 3h7v7M21 3l-10 10" /><path d="M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5" /></>}</svg>;
 }
 async function readResponse(response) {
   let data;
   try { data = await response.json(); } catch { throw new Error('The server returned an invalid response. Try again.'); }
-  if (!response.ok) { const error = new Error(data.error || 'The request failed. Try again.'); if (data.result) error.result = resultMetadata(data.result); throw error; }
+  if (!response.ok) { const error = new Error(data.error || 'The request failed. Try again.'); if (data.result) error.result = resultMetadata(data.result); if (Array.isArray(data.projects)) error.projects = data.projects.filter(item => typeof item?.id === 'string' && typeof item?.name === 'string').map(({ id, name }) => ({ id, name })); error.configured = data.configured === true; throw error; }
   return data;
 }
 
@@ -24,6 +24,7 @@ export default function App() {
   const [project, setProject] = useState(null);
   const [projects, setProjects] = useState([{ id: 'default', name: 'Default' }]);
   const [creating, setCreating] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [createError, setCreateError] = useState('');
   const createDialog = useRef(null);
   const loadSequence = useRef(0);
@@ -61,7 +62,8 @@ export default function App() {
   const promptDialog = useRef(null);
   const expandedPrompt = useRef(null);
   const modelDialog = useRef(null);
-  const locked = running || importing || saving || creating || !defaultsReady;
+  const busy = running || importing || saving || creating || deleting || defaultsLoading;
+  const locked = busy || !defaultsReady || !project;
   documentsRef.current = documents;
   const selected = documents.filter(doc => doc.selected);
   const selectedChars = selected.reduce((count, doc) => count + doc.text.length, 0);
@@ -83,12 +85,12 @@ export default function App() {
     const sequence = ++loadSequence.current;
     loadController.current?.abort(); const controller = new AbortController(); loadController.current = controller;
     stopRequested.current = true; controllers.current.forEach(item => item.abort()); active.current = false; setRunning(false);
-    setImporting(false); setSaving(false); setCreating(false);
+    setImporting(false); setSaving(false); setCreating(false); setDeleting(false);
     promptDialog.current?.close(); createDialog.current?.close();
     documentsRef.current.forEach(doc => { if (doc.url.startsWith('blob:')) URL.revokeObjectURL(doc.url); });
     setDefaultsLoading(true); setDefaultsReady(false); setDefaultsError(''); setProject(null); setPrompt(''); setDocuments([]); setRows([]); setSnapshot(null); setNotice({ text: '', error: false }); setSaveStatus('');
     try {
-      const data = await readResponse(await fetch(`/api/defaults?project=${encodeURIComponent(id)}`, { cache: 'no-store', signal: controller.signal }));
+      const data = await readResponse(await fetch(id ? `/api/defaults?project=${encodeURIComponent(id)}` : '/api/defaults', { cache: 'no-store', signal: controller.signal }));
       if (sequence !== loadSequence.current) return;
       setSharedConfigured(data.configured); setProjects(data.projects);
       const restored = [];
@@ -109,19 +111,21 @@ export default function App() {
         if (restored.filter(doc => doc.selected).reduce((n, doc) => n + doc.text.length, 0) > LIMITS.contextChars) throw new Error('Saved documents exceed the selected text limit.');
       }
       if (sequence !== loadSequence.current) return;
-      setProject(data.project); setPrompt(data.defaults?.systemPrompt ?? SAMPLE_PROMPT); setDocuments(restored);
-      const restoredRows = data.defaults?.rows ?? SAMPLE_ROWS.map(queued);
-      setRows(restoredRows.map(row => ({ ...row, adminSaved: row.status === 'done' || row.status === 'error' }))); setDefaultsReady(true); setIsSample(!data.defaults); setFileMeta(`${data.project.name} · ${restoredRows.length} cases`);
+      const resolved = data.project?.id ?? ''; setProjectId(resolved);
+      const url = new URL(location.href); if (resolved) url.searchParams.set('project', resolved); else url.searchParams.delete('project'); history.replaceState({}, '', url);
+      setProject(data.project); setPrompt(data.project ? data.defaults?.systemPrompt ?? SAMPLE_PROMPT : ''); setDocuments(restored);
+      const restoredRows = data.project ? data.defaults?.rows ?? SAMPLE_ROWS.map(queued) : [];
+      setRows(restoredRows.map(row => ({ ...row, adminSaved: row.status === 'done' || row.status === 'error' }))); setDefaultsReady(true); setIsSample(Boolean(data.project && !data.defaults)); setFileMeta(data.project ? `${data.project.name} · ${restoredRows.length} cases` : 'No project selected');
       setDocNotice(data.defaults ? 'Project loaded. Your edits stay in this page until an admin saves them.' : 'Your uploads stay in this page until an admin saves the project.');
-    } catch (error) { if (sequence === loadSequence.current && !controller.signal.aborted) setDefaultsError(`Could not load project: ${error.message}`); }
+    } catch (error) { if (sequence === loadSequence.current && !controller.signal.aborted) { if (error.projects) setProjects(error.projects); if (error.configured) setSharedConfigured(true); setDefaultsError(`Could not load project: ${error.message}`); } }
     finally { if (sequence === loadSequence.current) setDefaultsLoading(false); }
   }
   function switchProject(id, updateURL = true) {
-    if (updateURL) { const url = new URL(location.href); url.searchParams.set('project', id); history.pushState({}, '', url); }
+    if (updateURL) { const url = new URL(location.href); if (id) url.searchParams.set('project', id); else url.searchParams.delete('project'); history.pushState({}, '', url); }
     setProjectId(id); void loadDefaults(id);
   }
   async function createProject(event) {
-    event.preventDefault(); if (locked || creating) return;
+    event.preventDefault(); if (busy || creating || !sharedConfigured) return;
     const sequence = loadSequence.current;
     setCreating(true); setCreateError(''); const form = event.currentTarget;
     try {
@@ -165,7 +169,7 @@ export default function App() {
     const sequence = loadSequence.current;
     setImporting(true);
     try {
-      if (documents.length + files.length > LIMITS.files) throw new Error('Keep at most 10 PDFs in this page. Remove a document before adding more.');
+      if (documents.length + files.length > LIMITS.files) throw new Error(`Keep at most 10 PDFs in this page. ${authenticated ? 'Remove a document' : 'Reload the project'} before adding more.`);
       const added = [];
       for (const file of files) {
         const result = await extractPDF(file); const sha256 = await textHash(result.text);
@@ -183,7 +187,20 @@ export default function App() {
     setDocuments(current => current.map(item => item.id === doc.id ? { ...item, selected: checked } : item)); resetResults();
   }
   function removeDocument(doc) {
+    if (!authenticated || locked) return;
     setDocuments(current => current.filter(item => item.id !== doc.id)); if (doc.url.startsWith('blob:')) URL.revokeObjectURL(doc.url); resetResults();
+  }
+  async function deleteProject() {
+    if (!authenticated || locked || !project) return;
+    const target = project;
+    if (!window.confirm(`Delete project “${target.name}”? It will be removed from the project list. This cannot be undone from this app.`)) return;
+    const sequence = loadSequence.current; setDeleting(true);
+    try {
+      const data = await readResponse(await fetch('/api/defaults', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete', projectId: target.id, confirmName: target.name }) }));
+      if (sequence !== loadSequence.current) return;
+      setProjects(data.projects); switchProject(data.projects.find(item => item.id === 'default')?.id || data.projects[0]?.id || '');
+    } catch (error) { if (sequence === loadSequence.current) report(new Error(`Delete could not be confirmed: ${error.message} Reload to check the project list.`)); }
+    finally { if (sequence === loadSequence.current) setDeleting(false); }
   }
   async function login(event) {
     event.preventDefault(); setAuthBusy(true); setAuthError('');
@@ -278,12 +295,12 @@ export default function App() {
 
   return <div className="wrap">
     <header><div><h1>Prompt <span>Bench</span></h1><p className="sub">A workspace for prompts, knowledge, and benchmark cases.</p></div><div className="admin-actions"><span className="meta">OpenRouter · Independent requests</span>{authenticated ? <><button id="saveDefaultsBtn" disabled={locked || !sharedConfigured || authBusy} onClick={saveDefaults}>{saving ? 'Saving…' : 'Save project'}</button><button disabled={running || importing || saving || authBusy} onClick={logout}>Log out</button></> : <button id="loginBtn" disabled={!authReady || running || importing || saving} onClick={() => { setAuthError(''); loginDialog.current.showModal(); }}>Admin login</button>}</div></header>
-    <section className="project-toolbar panel" aria-label="Project selection"><label htmlFor="projectSelect">Project</label><select id="projectSelect" value={projectId} disabled={running || importing || saving || creating} onChange={event => switchProject(event.target.value)}>{!projects.some(item => item.id === projectId) && <option value={projectId}>Project unavailable</option>}{projects.map(item => <option value={item.id} key={item.id}>{item.name}</option>)}</select>{authenticated && <button disabled={locked || !sharedConfigured} onClick={() => { setCreateError(''); createDialog.current.showModal(); }}>New project</button>}<span className="meta">{defaultsReady ? 'Guest edits are temporary. Admins can save this project.' : 'Loading or unavailable project'}</span></section>
-    {(defaultsLoading || defaultsError || !sharedConfigured) && <div className={`shared-notice${defaultsError ? ' document-error' : ''}`} role="status">{defaultsLoading ? 'Loading project…' : defaultsError || 'Shared defaults are not configured. Your edits are temporary; an admin must connect a public Blob store to save them.'}{defaultsError && <button onClick={() => loadDefaults(projectId)}>Retry project</button>}</div>}
+    <section className="project-toolbar panel" aria-label="Project selection"><label htmlFor="projectSelect">Project</label><select id="projectSelect" value={projectId} disabled={running || importing || saving || creating || deleting} onChange={event => switchProject(event.target.value)}>{!projects.length ? <option value="">No projects</option> : !projects.some(item => item.id === projectId) && <option value={projectId}>Project unavailable</option>}{projects.map(item => <option value={item.id} key={item.id}>{item.name}</option>)}</select>{authenticated && <button disabled={busy || !sharedConfigured} onClick={() => { setCreateError(''); createDialog.current.showModal(); }}>New project</button>}{authenticated && project && <button id="deleteProjectBtn" disabled={locked || !sharedConfigured} onClick={deleteProject}>{deleting ? 'Deleting…' : 'Delete project'}</button>}<span className="meta">{defaultsReady && !project ? 'No projects. An admin can create a new project.' : defaultsReady ? 'Guest edits are temporary. Admins can save this project.' : 'Loading or unavailable project'}</span></section>
+    {(defaultsLoading || defaultsError || !sharedConfigured) && <div className={`shared-notice${defaultsError ? ' document-error' : ''}`} role="status">{defaultsLoading ? 'Loading project…' : defaultsError || 'Shared defaults are not configured. Your edits are temporary; an admin must connect a public Blob store to save them.'}{defaultsError && <><button onClick={() => loadDefaults(projectId)}>Retry project</button><button onClick={() => switchProject('')}>View available projects</button></>}</div>}
     {saveStatus && <div className="shared-notice" id="saveStatus" role="status">{saveStatus}</div>}
     <div className="grid"><div className="left-column">
       <section className="panel prompt-panel" aria-labelledby="sysLabel"><div className="panel-h"><span className="label" id="sysLabel">System prompt</span><div className="prompt-actions"><span className="meta" id="sysMeta">{prompt.length.toLocaleString()} chars</span><button id="expandPromptBtn" className="expand-prompt" title="Expand system prompt" aria-label="Expand system prompt" aria-haspopup="dialog" disabled={locked} onClick={() => { promptDialog.current.showModal(); expandedPrompt.current.focus(); }}><OpenIcon expand /></button></div></div><textarea id="sysPrompt" spellCheck="false" aria-labelledby="sysLabel" value={prompt} disabled={locked} onChange={event => changePrompt(event.target.value)} /></section>
-      <section className="panel" aria-labelledby="knowledgeLabel"><div className="panel-h"><span className="label" id="knowledgeLabel">Knowledge base</span><span className="chip">{authenticated ? 'Save to share' : 'Shared defaults + your edits'}</span></div><div className="knowledge-body"><p className="sub">Upload text-based PDFs: up to 5 MB and 10 pages each. Selected full text is used for every question.</p><label className="filebtn" htmlFor="docInput">Upload PDFs<input type="file" id="docInput" multiple accept=".pdf,application/pdf" disabled={locked} onChange={uploadDocuments} /></label><div id="documents">{documents.map(doc => <div className="document" key={doc.id}><label className="document-label"><input type="checkbox" checked={doc.selected} disabled={locked} onChange={event => toggleDocument(doc, event.target.checked)} /><span>{doc.name}<small>{doc.pages} page(s) · {doc.text.length.toLocaleString()} chars</small></span></label><div className="document-actions"><a className="document-open" href={doc.url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${doc.name} in a new tab`} title={`Open ${doc.name} in a new tab`}><OpenIcon /></a><button className="remove-document" disabled={locked} onClick={() => removeDocument(doc)} aria-label={`Remove ${doc.name}`}>Remove</button></div></div>)}</div>{!documents.length && <p className="sub">No documents yet. You can run with the system prompt alone.</p>}<p className="sub upload-notice" id="docNotice" role="status">{importing ? 'Reading file…' : docNotice}</p><p className="meta">{selectedChars.toLocaleString()} / 60,000 selected characters · Up to 10 PDFs. Scans and blank pages are not supported.</p></div></section>
+      <section className="panel" aria-labelledby="knowledgeLabel"><div className="panel-h"><span className="label" id="knowledgeLabel">Knowledge base</span><span className="chip">{authenticated ? 'Save to share' : 'Shared defaults + your edits'}</span></div><div className="knowledge-body"><p className="sub">Upload text-based PDFs: up to 5 MB and 10 pages each. Selected full text is used for every question.</p><label className="filebtn" htmlFor="docInput">Upload PDFs<input type="file" id="docInput" multiple accept=".pdf,application/pdf" disabled={locked} onChange={uploadDocuments} /></label><div id="documents">{documents.map(doc => <div className="document" key={doc.id}><label className="document-label"><input type="checkbox" checked={doc.selected} disabled={locked} onChange={event => toggleDocument(doc, event.target.checked)} /><span>{doc.name}<small>{doc.pages} page(s) · {doc.text.length.toLocaleString()} chars</small></span></label><div className="document-actions"><a className="document-open" href={doc.url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${doc.name} in a new tab`} title={`Open ${doc.name} in a new tab`}><OpenIcon /></a>{authenticated && <button className="remove-document" disabled={locked} onClick={() => removeDocument(doc)} aria-label={`Remove ${doc.name}`}>Remove</button>}</div></div>)}</div>{!documents.length && <p className="sub">{project ? 'No documents yet. You can run with the system prompt alone.' : 'Select or create a project to begin.'}</p>}<p className="sub upload-notice" id="docNotice" role="status">{importing ? 'Reading file…' : docNotice}</p><p className="meta">{selectedChars.toLocaleString()} / 60,000 selected characters · Up to 10 PDFs. Scans and blank pages are not supported.</p></div></section>
     </div>
     <section className="panel" aria-labelledby="casesLabel"><div className="panel-h"><span className="label" id="casesLabel">Benchmark cases {isSample && <span className="sample-tag" id="sampleTag">Sample data</span>}</span><span className="meta" id="fileMeta">{fileMeta}</span></div>
       <div className="toolbar"><label className="filebtn" htmlFor="csvInput">Import CSV<input type="file" id="csvInput" accept=".csv,text/csv" disabled={locked} onChange={importCSV} /></label><button className="model-btn" id="modelBtn" disabled={locked} onClick={() => modelDialog.current.showModal()}>Change model · {modelName}</button><span className="spacer" /><button className="primary" id="runBtn" disabled={locked || modelsLoading || !model || !!connectionError || !rows.length} onClick={() => runQueue(rows, true)}>Run all</button><button id="stopBtn" disabled={!running} onClick={stop}>Stop</button><button id="exportBtn" disabled={locked || !rows.some(row => row.status === 'done' || row.status === 'error')} onClick={exportResults}>Export results</button></div>

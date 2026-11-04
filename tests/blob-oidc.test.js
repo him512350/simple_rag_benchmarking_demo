@@ -41,7 +41,7 @@ test('real Blob SDK resolves request-context OIDC for list, head, put and presig
     res = response(); await storage.handler(request({ projectId: 'default', rows: [], systemPrompt: 'Saved through OIDC', documents: [{ name: 'policy.pdf', pathname: pdfPath, selected: true }] }), res); assert.equal(res.code, 200); assert.equal(res.body.defaults.documents[0].pages, 1);
     res = response(); await storage.handler(request(null, 'GET'), res); assert.equal(res.code, 200); assert.equal(res.body.defaults.systemPrompt, 'Saved through OIDC');
     res = response(); await storage.uploadHandler(request({ type: 'blob.generate-presigned-url', payload: { pathname: pdfPath, multipart: false } }), res); assert.equal(res.code, 200); assert.ok(res.body.presignedUrlPayload.delegationToken); assert.equal(res.body.presignedUrlPayload.params['vercel-blob-allow-overwrite'], 'false');
-    assert.equal(calls.filter(call => call.method === 'GET').length, 5); assert.equal(calls.filter(call => call.method === 'PUT').length, 1); assert.equal(calls.filter(call => call.path.endsWith('/signed-token')).length, 1);
+    assert.equal(calls.filter(call => call.method === 'GET').length, 8); assert.equal(calls.filter(call => call.method === 'PUT').length, 1); assert.equal(calls.filter(call => call.path.endsWith('/signed-token')).length, 1);
   } finally { globalThis[symbol] = previousContext; setGlobalDispatcher(dispatcher); await agent.close(); }
 });
 
