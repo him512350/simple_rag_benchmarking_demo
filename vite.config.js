@@ -18,10 +18,11 @@ export default defineConfig(({ mode }) => {
           res.status = code => { res.statusCode = code; return res; };
           res.json = value => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(value)); };
           if (req.method === 'POST') {
+            const maxBytes = path === '/api/defaults' ? LIMITS.defaultsBytes : LIMITS.requestBytes;
             let size = 0; const chunks = [];
             for await (const chunk of req) {
               size += chunk.length;
-              if (size > LIMITS.requestBytes) return res.status(413).json({ error: 'Request is too large (maximum 256 KB).' });
+              if (size > maxBytes) return res.status(413).json({ error: path === '/api/defaults' ? 'Project data exceeds 3 MiB.' : 'Request is too large (maximum 256 KB).' });
               chunks.push(chunk);
             }
             req.body = Buffer.concat(chunks).toString('utf8');
