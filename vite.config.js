@@ -5,7 +5,7 @@ import { defaults } from './lib/defaults.js';
 import { LIMITS } from './lib/limits.js';
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), ['OPENROUTER_', 'ADMIN_', 'BLOB_']);
+  const env = loadEnv(mode, process.cwd(), ['OPENROUTER_', 'ADMIN_', 'BLOB_', 'VERCEL_OIDC_TOKEN']);
   for (const [key, value] of Object.entries(env)) if (value) process.env[key] = value;
   return {
     plugins: [{

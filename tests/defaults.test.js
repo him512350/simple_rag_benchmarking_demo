@@ -11,7 +11,7 @@ function response() { return { headers: {}, setHeader(k, v) { this.headers[k] = 
 const security = { mutation() {}, requireAdmin() {} };
 function setup(overrides = {}) {
   const commits = []; const fetched = [];
-  const storage = createDefaults({ getToken: () => 'test-token', security, blob: { head: async pathname => ({ pathname, url: url(pathname), contentType: 'application/pdf', size: 4 }), list: async () => ({ blobs: [], hasMore: false }), put: async (...args) => { commits.push(args); } }, fetchImpl: async location => { fetched.push(location); return new Response('%PDF'); }, parsePDF: async () => ({ pages: 2, text: 'Actual parsed text.' }), ...overrides });
+  const storage = createDefaults({ getToken: () => 'test-token', getStoreId: () => '', getWebhookKey: () => 'test-public-key', issueToken: async options => options, security, blob: { head: async pathname => ({ pathname, url: url(pathname), contentType: 'application/pdf', size: 4 }), list: async () => ({ blobs: [], hasMore: false }), put: async (...args) => { commits.push(args); } }, fetchImpl: async location => { fetched.push(location); return new Response('%PDF'); }, parsePDF: async () => ({ pages: 2, text: 'Actual parsed text.' }), ...overrides });
   return { storage, commits, fetched };
 }
 test('server trusts canonical head URL and parsed PDF, never client claims; immutable last commit', async () => {
@@ -46,9 +46,9 @@ test('unconfigured/empty store fallback, read failure stays an error', async () 
   res = response(); await setup({ blob: { list: async () => { throw new Error('network'); } } }).storage.handler(request(null, 'GET'), res); assert.equal(res.code, 502);
 });
 test('upload token validates session/origin/path and caps; completion relies on SDK verification', async () => {
-  let options; const storage = setup({ upload: async opts => { options = opts; if (opts.body.type === 'blob.generate-client-token') return opts.onBeforeGenerateToken(opts.body.payload.pathname); await opts.onUploadCompleted({}); return { ok: true }; } }).storage;
-  let res = response(); await storage.uploadHandler(request({ type: 'blob.generate-client-token', payload: { pathname: path } }), res); assert.equal(res.code, 200); assert.equal(res.body.maximumSizeInBytes, 5 * 1024 * 1024); assert.equal(res.body.allowOverwrite, false); assert.deepEqual(res.body.allowedContentTypes, ['application/pdf']); assert.ok(res.body.validUntil <= Date.now() + 300000);
-  res = response(); await storage.uploadHandler(request({ type: 'blob.generate-client-token', payload: { pathname: 'bad' } }), res); assert.equal(res.code, 400);
+  let options; const storage = setup({ upload: async opts => { options = opts; if (opts.body.type === 'blob.generate-presigned-url') return opts.getSignedToken(opts.body.payload.pathname); await opts.onUploadCompleted({}); return { ok: true }; } }).storage;
+  let res = response(); await storage.uploadHandler(request({ type: 'blob.generate-presigned-url', payload: { pathname: path } }), res); assert.equal(res.code, 200); assert.equal(res.body.token.maximumSizeInBytes, 5 * 1024 * 1024); assert.equal(res.body.urlOptions.allowOverwrite, false); assert.deepEqual(res.body.token.allowedContentTypes, ['application/pdf']); assert.ok(res.body.token.validUntil <= Date.now() + 300000);
+  res = response(); await storage.uploadHandler(request({ type: 'blob.generate-presigned-url', payload: { pathname: 'bad' } }), res); assert.equal(res.code, 400);
   const noSession = setup({ security: { mutation() { throw new ApiError(403, 'Origin'); }, requireAdmin() { throw new ApiError(401, 'Login'); } }, upload: async opts => { await opts.onUploadCompleted({}); return { ok: true }; } }).storage;
   res = response(); await noSession.uploadHandler(request({ type: 'blob.upload-completed' }), res); assert.equal(res.code, 200);
 });
@@ -59,12 +59,12 @@ test('failed commit performs no deletion and does not falsely promise an unchang
 
 test('upload generation uses real session/origin checks; unsigned real SDK completion is rejected', async () => {
   const realAuth = createAuth(() => ({}));
-  const fakeSDK = async options => options.onBeforeGenerateToken(options.body.payload.pathname);
+  const fakeSDK = async options => options.getSignedToken(options.body.payload.pathname);
   const storage = setup({ security: realAuth, upload: fakeSDK }).storage;
-  const body = { type: 'blob.generate-client-token', payload: { pathname: path } };
+  const body = { type: 'blob.generate-presigned-url', payload: { pathname: path } };
   let res = response(); await storage.uploadHandler(request(body), res); assert.equal(res.code, 401);
   res = response(); const bad = request(body); bad.headers.origin = 'https://evil.test'; await storage.uploadHandler(bad, res); assert.equal(res.code, 403);
-  const realSDK = createDefaults({ getToken: () => 'vercel_blob_rw_teststore_faketoken', security: realAuth });
+  const realSDK = createDefaults({ getToken: () => '', getStoreId: () => '', getWebhookKey: () => 'test-public-key', security: realAuth });
   res = response(); await realSDK.uploadHandler(request({ type: 'blob.upload-completed', payload: {} }), res); assert.ok(res.code >= 400);
 });
 

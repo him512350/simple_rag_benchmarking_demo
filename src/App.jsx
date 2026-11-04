@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { LIMITS, utf8Bytes } from '../lib/limits.js';
 import { rowsFromCSV, resultsCSV } from './csv.js';
 import { extractPDF } from './pdf.js';
-import { upload } from '@vercel/blob/client';
+import { uploadPresigned } from '@vercel/blob/client';
 import { SAMPLE_PROMPT, SAMPLE_ROWS } from './sample.js';
 
 const queued = row => ({ ...row, status: 'queued', response: '', error: '', elapsedMs: null, usage: null, truncated: false });
@@ -166,7 +166,7 @@ export default function App() {
         let pathname = doc.pathname;
         if (!pathname) {
           pathname = `prompt-bench/pdfs/${crypto.randomUUID()}.pdf`;
-          await upload(pathname, doc.file.slice(0, doc.file.size, 'application/pdf'), { access: 'public', contentType: 'application/pdf', handleUploadUrl: '/api/upload' });
+          await uploadPresigned(pathname, doc.file.slice(0, doc.file.size, 'application/pdf'), { access: 'public', contentType: 'application/pdf', handleUploadUrl: '/api/upload' });
           setDocuments(current => current.map(item => item.id === doc.id ? { ...item, pathname } : item));
         }
         prepared.push({ pathname, name: doc.name, selected: doc.selected });
