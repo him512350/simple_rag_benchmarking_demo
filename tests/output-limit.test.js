@@ -12,7 +12,7 @@ const response = () => ({ setHeader() {}, status(code) { this.code = code; retur
 const usage = { prompt_tokens: 592, completion_tokens: 4096, total_tokens: 4688 };
 async function run(payload, options = {}) {
   let sent;
-  const service = createOpenRouter(async (url, request) => url.endsWith('/models') ? { ok: true, json: async () => ({ data: [model(options.model)] }) } : (sent = JSON.parse(request.body), { ok: options.status == null, status: options.status, json: async () => payload }));
+  const service = createOpenRouter(async (url, request) => url.endsWith('/models') ? { ok: true, json: async () => ({ data: [model(options.model)] }) } : (sent = JSON.parse(request.body), { ok: options.status == null, status: options.status, json: async () => payload }), null);
   const res = response(); await createHandlers(service, () => 'server-key-test-only').benchmark({ method: 'POST', headers: { 'content-type': 'application/json' }, body: body() }, res);
   return { res, sent };
 }
@@ -40,7 +40,7 @@ test('provider errors remain sanitized and available metrics are bounded', async
 
 test('model eligibility and context reserve enforce a genuine 4096-token output budget', async () => {
   const calls = [];
-  const service = createOpenRouter(async (url, request) => { if (url.endsWith('/models')) return { ok: true, json: async () => ({ data: [model({ id: 'too-small', top_provider: { max_completion_tokens: 4095 } }), model({ id: 'zero', top_provider: { max_completion_tokens: 0 } }), model({ id: 'tiny-context', context_length: 4096 }), model({ context_length: 4600 })] }) }; calls.push(request); return { ok: true, json: async () => ({ choices: [{ message: { content: 'Answer' }, finish_reason: 'stop' }] }) }; });
+  const service = createOpenRouter(async (url, request) => { if (url.endsWith('/models')) return { ok: true, json: async () => ({ data: [model({ id: 'too-small', top_provider: { max_completion_tokens: 4095 } }), model({ id: 'zero', top_provider: { max_completion_tokens: 0 } }), model({ id: 'tiny-context', context_length: 4096 }), model({ context_length: 4600 })] }) }; calls.push(request); return { ok: true, json: async () => ({ choices: [{ message: { content: 'Answer' }, finish_reason: 'stop' }] }) }; }, null);
   assert.deepEqual((await service.models()).map(item => item.id), ['test/model']);
   await assert.rejects(() => service.completion({ ...body(), question: 'a'.repeat(300) }, 'key'), /context window/); assert.equal(calls.length, 0);
   await service.completion({ ...body(), question: 'a'.repeat(10) }, 'key'); assert.equal(JSON.parse(calls[0].body).max_completion_tokens, 4096);
