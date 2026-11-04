@@ -47,7 +47,7 @@ test('row allowlist preserves separate run provenance and rejects impossible met
   assert.equal(rows[0].extra, undefined); assert.equal(rows[0].provenance.extra, undefined); assert.equal(rows[0].provenance.model, 'retired/model'); assert.equal(rows[1].provenance.model, 'new/model');
   for (const patch of [{ status: 'running' }, { elapsedMs: -1 }, { usage: { total_tokens: Infinity } }, { response: 'x'.repeat(LIMITS.responseChars + 1) }, { provenance: { ...original.provenance, projectId: randomUUID() } }, { provenance: { ...original.provenance, runAt: 'yesterday' } }]) assert.throws(() => cleanRows([{ ...original, ...patch }], p));
   assert.throws(() => assertDefaultsSize({ text: '中'.repeat(1100000) }), /3 MiB/);
-  assert.throws(() => validateBody({ model: 'x', systemPrompt: 'x', question: 'x', documents: [], extra: 'x'.repeat(300000) }), /too large/);
+  assert.throws(() => validateBody({ model: 'x', systemPrompt: 'x', question: 'x', documents: [], extra: 'x'.repeat(LIMITS.requestBytes + 1) }), /too large/);
 });
 
 test('export uses each saved row source, supports old snapshot fallback and leaves unrun provenance empty', () => {
@@ -66,4 +66,16 @@ test('defaults 3 MiB cap is independent; invalid saves never create a version', 
   const state = memory(); let result = await state.call({ action: 'save', projectId: 'default', systemPrompt: 'Prompt', documents: [] }); assert.equal(result.code, 400); assert.equal(state.puts.length, 0);
   result = await state.call({ action: 'save', projectId: 'default', systemPrompt: 'Prompt', documents: [], rows: [], unknown: 'x'.repeat(LIMITS.defaultsBytes) }); assert.equal(result.code, 413); assert.equal(state.puts.length, 0);
   result = await state.call({ action: 'create', name: ' ' }); assert.equal(result.code, 400); assert.equal(state.puts.length, 0);
+});
+
+test('200000-character Chinese prompts and one historical copy round-trip; over-limit saves preserve the prior version', async () => {
+  const state = memory(); const project = DEFAULT_PROJECT; const prompt = '中'.repeat(200000);
+  const row = sampleRow(project); row.provenance.systemPrompt = prompt;
+  let result = await state.call({ action: 'save', projectId: project.id, systemPrompt: prompt, documents: [], rows: [row] });
+  assert.equal(result.code, 200); const writes = state.puts.length;
+  result = await state.call(null); assert.equal(result.data.defaults.systemPrompt, prompt); assert.equal(result.data.defaults.rows[0].provenance.systemPrompt, prompt);
+  result = await state.call({ action: 'save', projectId: project.id, systemPrompt: prompt + '中', documents: [], rows: [] }); assert.equal(result.code, 400); assert.equal(state.puts.length, writes);
+  const tooManyCopies = Array.from({ length: 6 }, (_, i) => ({ ...row, id: String(i) }));
+  result = await state.call({ action: 'save', projectId: project.id, systemPrompt: prompt, documents: [], rows: tooManyCopies }); assert.equal(result.code, 413); assert.equal(state.puts.length, writes);
+  result = await state.call(null); assert.equal(result.data.defaults.rows.length, 1); assert.equal(result.data.defaults.systemPrompt, prompt);
 });

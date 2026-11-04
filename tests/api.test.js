@@ -17,7 +17,7 @@ test('server rejects missing key without exposing config values', async () => {
   const list = response(); await handlers.models(request(null, 'GET'), list); assert.equal(list.code, 503);
 });
 test('validation enforces types, byte/text/document limits', () => {
-  for (const body of [null, [], { ...good(), systemPrompt: ' ' }, { ...good(), question: 'a'.repeat(4001) }, { ...good(), documents: Array.from({ length: 11 }, () => ({ name: 'x', text: 'y' })) }, { ...good(), documents: [{ name: 'x', text: 'a'.repeat(60001) }] }, { ...good(), systemPrompt: 'a'.repeat(12001) }]) assert.throws(() => validateBody(body));
+  for (const body of [null, [], { ...good(), systemPrompt: ' ' }, { ...good(), question: 'a'.repeat(4001) }, { ...good(), documents: Array.from({ length: 11 }, () => ({ name: 'x', text: 'y' })) }, { ...good(), documents: [{ name: 'x', text: 'a'.repeat(60001) }] }, { ...good(), systemPrompt: 'a'.repeat(200001) }]) assert.throws(() => validateBody(body));
   assert.throws(() => validateBody({ ...good(), extra: 'x'.repeat(LIMITS.requestBytes) }), /too large/);
   assert.deepEqual(validateBody({ ...good(), messages: ['ignore'], url: 'http://evil.test' }), good());
 });

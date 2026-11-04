@@ -21,3 +21,14 @@ test('context reserve counts actual prefixed system UTF-8 bytes at the boundary'
   const calls = []; await service(exact, calls).completion(body, 'test-key'); assert.equal(calls.length, 1);
   const rejected = []; await assert.rejects(() => service(exact - 1, rejected).completion(body, 'test-key'), /context window/); assert.equal(rejected.length, 0);
 });
+
+test('200000-character Unicode prompt passes byte validation and runs only when actual model context fits', async () => {
+  const { validateBody } = await import('../lib/handlers.js');
+  const request = { ...body, systemPrompt: '中'.repeat(200000) };
+  assert.deepEqual(validateBody(request), request);
+  assert.throws(() => validateBody({ ...request, systemPrompt: request.systemPrompt + '中' }), /200,000/);
+  const calls = []; await service(1000000, calls).completion(request, 'test-key'); assert.equal(calls[0].messages[0].content, `${policy}\n\n${request.systemPrompt}`);
+  await assert.rejects(() => service(128000, []).completion(request, 'test-key'), /context window/);
+  const escaped = { ...request, systemPrompt: '\u0001'.repeat(200000), documents: [{ name: 'reference.pdf', text: '\u0001'.repeat(60000) }], question: '\u0001'.repeat(4000) };
+  assert.deepEqual(validateBody(escaped), escaped);
+});

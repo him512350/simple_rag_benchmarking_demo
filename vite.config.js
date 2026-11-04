@@ -22,7 +22,7 @@ export default defineConfig(({ mode }) => {
             let size = 0; const chunks = [];
             for await (const chunk of req) {
               size += chunk.length;
-              if (size > maxBytes) return res.status(413).json({ error: path === '/api/defaults' ? 'Project data exceeds 3 MiB.' : 'Request is too large (maximum 256 KB).' });
+              if (size > maxBytes) return res.status(413).json({ error: path === '/api/defaults' ? 'Project data exceeds 3 MiB.' : 'Request is too large (maximum 2 MiB).' });
               chunks.push(chunk);
             }
             req.body = Buffer.concat(chunks).toString('utf8');

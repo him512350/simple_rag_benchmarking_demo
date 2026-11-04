@@ -42,12 +42,12 @@ Use Vercel Deployment Protection and set an OpenRouter key spending limit before
 | --- | --- |
 | PDF file | 5 MiB, 10 pages, at most 10 files in the page |
 | Selected document text | 60,000 JavaScript characters total |
-| System prompt | 12,000 characters |
+| System prompt | 200,000 characters |
 | Question | 4,000 characters |
 | CSV | 1 MiB, 50 nonblank questions |
 | XLSX | 5 MiB; first worksheet; 50 nonblank questions |
 | XLSX archive / parsing | 200 entries, 20 MiB expanded total, 8 MiB per entry, 50,000 stored first-sheet cells, 10-second worker timeout |
-| Benchmark request JSON | 256 KiB (UTF-8, checked in browser and server) |
+| Benchmark request JSON | 2 MiB (UTF-8, checked in browser and server) |
 | Project save request / manifest | 3 MiB (UTF-8) |
 | Saved answer / error | 32,000 / 2,000 characters per case |
 | Projects | 50, including Default; names are fixed at creation |
@@ -64,7 +64,7 @@ The original standalone design is preserved in `Prompt Bench.html` as a historic
 
 `npm test` covers API validation, fixed upstream requests, secret handling, metadata filtering/caching, output limits, context limits, cancellation, and CSV parsing/export. Browser checks use mocked OpenRouter responses when no server key is available; those checks do not establish live provider accuracy or performance. No production deployment is required to build or test locally.
 
-Verified with Node.js 24: 54 automated tests and the production build pass. Chrome browser checks covered English and Chinese PDF text extraction, multiple selected documents, file/page/text limits, CSV import, cancellation with a single active request, retries and provider errors, token display/truncation, full-prompt/document attribution in exports, and 320/390/920/1440-pixel layouts. The model dialog was also checked with over 400 real model metadata entries. Completion responses and reported durations in these browser checks were mocked: no paid/live completion was performed.
+Verified with Node.js 24: 58 automated tests and the production build pass. Chrome browser checks covered English and Chinese PDF text extraction, multiple selected documents, file/page/text limits, CSV import, cancellation with a single active request, retries and provider errors, token display/truncation, full-prompt/document attribution in exports, and 320/390/920/1440-pixel layouts. The model dialog was also checked with over 400 real model metadata entries. Completion responses and reported durations in these browser checks were mocked: no paid/live completion was performed.
 
 ## Shared defaults and admin login
 
@@ -109,3 +109,5 @@ Only checked knowledge documents are sent with a benchmark. With none checked, t
 ### Company completion gateway
 
 Set `OPENROUTER_BASE_URL=https://projteam-openrouter-proxy-790311698684.asia-east1.run.app/v1` and put the gateway key in server-only `OPENROUTER_API_KEY` for Vercel Production, then redeploy. Omitting the base URL uses `https://openrouter.ai/api/v1`. Only HTTPS bases without credentials, query strings or fragments are accepted; redirects are rejected. Model metadata always comes from the official public OpenRouter models endpoint without Authorization. Completion requests use the configured endpoint and its key. Cases run sequentially to avoid overlapping requests with the same gateway key; there is no automatic retry. A 429 can mean the weekly allowance is exhausted or another request is still in progress. Historical model sources remain unchanged.
+
+System prompt limits use JavaScript string length (UTF-16 code units), consistent with the editor counter. Saved projects still have a 3 MiB JSON limit: each completed row retains its full original prompt, so many results with long prompts can exceed that limit. Such saves fail without replacing the previous saved version. The benchmark request limit is 2 MiB; actual model context capacity is checked separately, including the server reference policy and output reserve.

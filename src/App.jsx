@@ -232,7 +232,7 @@ export default function App() {
     const sequence = loadSequence.current;
     setSaving(true); setSaveStatus('Saving project…');
     try {
-      if (!prompt.trim() || prompt.length > LIMITS.systemChars) throw new Error('System prompt must contain 1–12,000 characters.');
+      if (!prompt.trim() || prompt.length > LIMITS.systemChars) throw new Error('System prompt must contain 1–200,000 characters.');
       const prepared = [];
       for (const doc of documents) {
         let pathname = doc.pathname;
@@ -265,11 +265,11 @@ export default function App() {
     const runSnapshot = { outputTokens: LIMITS.outputTokens, projectId: project.id, projectName: project.name, model, systemPrompt: prompt, documentNames: selected.map(doc => doc.name), documentFingerprints: selected.map(doc => ({ name: doc.name, sha256: doc.sha256, pathname: doc.pathname ?? null })), documents: selected.map(({ name, text }) => ({ name, text })) };
     try {
       if (!model || connectionError) throw new Error('Connect OpenRouter and select a model before running.');
-      if (!prompt.trim() || prompt.length > LIMITS.systemChars) throw new Error('Write a system prompt of 1–12,000 characters.');
+      if (!prompt.trim() || prompt.length > LIMITS.systemChars) throw new Error('Write a system prompt of 1–200,000 characters.');
       if (selectedChars > LIMITS.contextChars) throw new Error('Selected documents exceed 60,000 characters.');
       for (const row of list) {
         if (!row.input.trim() || row.input.length > LIMITS.questionChars) throw new Error('Each question must contain 1–4,000 characters.');
-        if (utf8Bytes(JSON.stringify({ model, systemPrompt: prompt, question: row.input, documents: runSnapshot.documents })) > LIMITS.requestBytes) throw new Error('The prompt, question, and documents exceed the 256 KB request limit. Select less text.');
+        if (utf8Bytes(JSON.stringify({ model, systemPrompt: prompt, question: row.input, documents: runSnapshot.documents })) > LIMITS.requestBytes) throw new Error('The prompt, question, and documents exceed the 2 MiB request limit. Select less text.');
       }
     } catch (error) { report(error); return; }
     active.current = true; stopRequested.current = false; setRunning(true); setSnapshot(runSnapshot); setNotice({ text: '', error: false });
@@ -322,7 +322,7 @@ export default function App() {
     </section></div>}
     <dialog id="createProjectDialog" ref={createDialog} aria-labelledby="createProjectTitle"><h2 id="createProjectTitle">New project</h2><p className="sub">Start with a customer service prompt and no questions, documents or results.</p><form className="login-form" onSubmit={createProject}><label>Project name<input name="name" maxLength={80} required disabled={creating} /></label>{createError && <p className="document-error" role="alert">{createError}</p>}<button className="primary" disabled={creating}>{creating ? 'Creating…' : 'Create project'}</button></form><form method="dialog"><button disabled={creating}>Close</button></form></dialog>
     <dialog id="loginDialog" ref={loginDialog} aria-labelledby="loginTitle"><h2 id="loginTitle">Admin login</h2><p className="sub">Log in to create projects and save their prompts, documents, cases, and results.</p><form className="login-form" onSubmit={login}><label>Username<input name="username" autoComplete="username" required disabled={authBusy} /></label><label>Password<input name="password" type="password" autoComplete="current-password" required disabled={authBusy} /></label>{authError && <p className="document-error" role="alert">{authError}</p>}<button className="primary" disabled={authBusy}>{authBusy ? 'Logging in…' : 'Log in'}</button></form><form method="dialog"><button disabled={authBusy}>Close</button></form></dialog>
-    <dialog id="promptDialog" ref={promptDialog} aria-labelledby="expandedPromptTitle" aria-describedby="expandedPromptHelp"><div className="expanded-prompt-layout"><div><h2 id="expandedPromptTitle">System prompt</h2><p className="sub" id="expandedPromptHelp">Changes sync automatically. Maximum 12,000 characters.</p></div><textarea id="expandedPrompt" ref={expandedPrompt} spellCheck="false" aria-labelledby="expandedPromptTitle" value={prompt} disabled={locked} onChange={event => changePrompt(event.target.value)} /><form method="dialog"><button>Close</button></form></div></dialog>
+    <dialog id="promptDialog" ref={promptDialog} aria-labelledby="expandedPromptTitle" aria-describedby="expandedPromptHelp"><div className="expanded-prompt-layout"><div><h2 id="expandedPromptTitle">System prompt</h2><p className="sub" id="expandedPromptHelp">Changes sync automatically. Maximum 200,000 characters.</p></div><textarea id="expandedPrompt" ref={expandedPrompt} spellCheck="false" aria-labelledby="expandedPromptTitle" value={prompt} disabled={locked} onChange={event => changePrompt(event.target.value)} /><form method="dialog"><button>Close</button></form></div></dialog>
     <dialog id="modelDialog" ref={modelDialog} aria-labelledby="modelTitle"><h2 id="modelTitle">Choose a model</h2><p className="sub">Text models available through OpenRouter. Usage is billed to the server account.</p><input className="model-search" aria-label="Search models" placeholder="Search name or model ID" value={search} onChange={event => setSearch(event.target.value)} /><div className="model-options" id="modelOptions">{models.filter(item => `${item.name} ${item.id}`.toLowerCase().includes(search.toLowerCase())).map(item => <button key={item.id} aria-pressed={model === item.id} onClick={() => { if (item.id !== model) { setModel(item.id); settingsChanged(); } modelDialog.current.close(); }}>{item.name}<small className="meta">{item.id} · {item.contextLength.toLocaleString()} context</small></button>)}{!modelsLoading && !models.length && <p className="sub">{connectionError || 'No models available.'}</p>}</div><form method="dialog"><button>Close</button></form></dialog>
   </div>;
 }
