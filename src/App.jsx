@@ -291,7 +291,7 @@ export default function App() {
         } finally { controllers.current.delete(controller); }
       }
     }
-    await Promise.all(Array.from({ length: Math.min(2, list.length) }, worker));
+    await Promise.all(Array.from({ length: Math.min(1, list.length) }, worker));
     if (sequence !== loadSequence.current) return;
     active.current = false; setRunning(false);
     setNotice({ text: stopRequested.current ? 'Stopped. Unfinished cases remain queued. Requests already accepted by a provider may still be billed.' : 'Benchmark finished. Review responses and usage below.', error: false });
