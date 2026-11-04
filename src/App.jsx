@@ -2,11 +2,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import { LIMITS, utf8Bytes } from '../lib/limits.js';
 import { rowsFromCSV, resultsCSV } from './csv.js';
 import { extractPDF } from './pdf.js';
+import { upload } from '@vercel/blob/client';
 import { SAMPLE_PROMPT, SAMPLE_ROWS } from './sample.js';
 
-const DRAFT_KEY = 'promptbench.systemPrompt';
 const queued = row => ({ ...row, status: 'queued', response: '', error: '', elapsedMs: null, usage: null, truncated: false });
-function initialPrompt() { try { return localStorage.getItem(DRAFT_KEY) ?? SAMPLE_PROMPT; } catch { return SAMPLE_PROMPT; } }
 function OpenIcon({ expand = false }) {
   return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{expand ? <path d="M8 3H3v5M3 3l7 7M16 21h5v-5M21 21l-7-7M16 3h5v5M21 3l-7 7M8 21H3v-5M3 21l7-7" /> : <><path d="M14 3h7v7M21 3l-10 10" /><path d="M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5" /></>}</svg>;
 }
@@ -18,7 +17,7 @@ async function readResponse(response) {
 }
 
 export default function App() {
-  const [prompt, setPrompt] = useState(initialPrompt);
+  const [prompt, setPrompt] = useState('');
   const [rows, setRows] = useState(() => SAMPLE_ROWS.map(queued));
   const [documents, setDocuments] = useState([]);
   const [models, setModels] = useState([]);
@@ -33,13 +32,24 @@ export default function App() {
   const [isSample, setIsSample] = useState(true);
   const [docNotice, setDocNotice] = useState('Uploads stay in this page until reload.');
   const [snapshot, setSnapshot] = useState(null);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [defaultsLoading, setDefaultsLoading] = useState(true);
+  const [defaultsReady, setDefaultsReady] = useState(false);
+  const [defaultsError, setDefaultsError] = useState('');
+  const [sharedConfigured, setSharedConfigured] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState('');
+  const loginDialog = useRef(null);
   const stopRequested = useRef(false);
   const active = useRef(false);
   const controllers = useRef(new Set());
   const promptDialog = useRef(null);
   const expandedPrompt = useRef(null);
   const modelDialog = useRef(null);
-  const locked = running || importing;
+  const locked = running || importing || saving || !defaultsReady;
   const selected = documents.filter(doc => doc.selected);
   const selectedChars = selected.reduce((count, doc) => count + doc.text.length, 0);
   const done = rows.filter(row => row.status === 'done').length;
@@ -56,13 +66,43 @@ export default function App() {
     } catch (error) { setConnectionError(error.message); }
     finally { setModelsLoading(false); }
   }
-  useEffect(() => { loadModels(); }, []);
+  async function loadDefaults() {
+    setDefaultsLoading(true); setDefaultsReady(false); setDefaultsError('');
+    try {
+      const data = await readResponse(await fetch('/api/defaults', { cache: 'no-store' }));
+      setSharedConfigured(data.configured);
+      const restored = [];
+      if (data.defaults) {
+        for (const doc of data.defaults.documents) {
+          const response = await fetch(doc.url, { cache: 'no-store', redirect: 'error' });
+          if (!response.ok || Number(response.headers.get('content-length')) > LIMITS.fileBytes) throw new Error(`Could not load ${doc.name}.`);
+          const reader = response.body.getReader(); const chunks = []; let size = 0;
+          try {
+            while (true) { const { done, value } = await reader.read(); if (done) break; size += value.length; if (size > LIMITS.fileBytes) throw new Error('Saved PDF exceeds 5 MB.'); chunks.push(value); }
+          } finally { await reader.cancel(); }
+          const file = new File(chunks, doc.name, { type: 'application/pdf' });
+          const parsed = await extractPDF(file);
+          restored.push({ ...doc, ...parsed, id: crypto.randomUUID(), file: null });
+        }
+        if (restored.filter(doc => doc.selected).reduce((n, doc) => n + doc.text.length, 0) > LIMITS.contextChars) throw new Error('Saved documents exceed the selected text limit.');
+      }
+      setPrompt(data.defaults?.systemPrompt ?? SAMPLE_PROMPT); setDocuments(restored); setDefaultsReady(true);
+      setDocNotice(data.defaults ? 'Shared defaults loaded. Your edits stay in this page until an admin saves them.' : 'Your uploads stay in this page until an admin saves shared defaults.');
+    } catch (error) { setDefaultsError(`Could not load shared defaults: ${error.message}`); }
+    finally { setDefaultsLoading(false); }
+  }
+  async function checkSession() {
+    try { const data = await readResponse(await fetch('/api/auth', { cache: 'no-store' })); setAuthenticated(data.authenticated); }
+    catch { setAuthenticated(false); }
+    finally { setAuthReady(true); }
+  }
+  useEffect(() => { loadModels(); loadDefaults(); checkSession(); }, []);
   useEffect(() => () => { controllers.current.forEach(controller => controller.abort()); }, []);
 
-  function resetResults() { setRows(current => current.map(queued)); setSnapshot(null); setNotice({ text: '', error: false }); }
+  function resetResults() { setSaveStatus(''); setRows(current => current.map(queued)); setSnapshot(null); setNotice({ text: '', error: false }); }
   function changePrompt(value) {
     setPrompt(value); resetResults();
-    try { localStorage.setItem(DRAFT_KEY, value); } catch { /* The editor works without storage. */ }
+    setSaveStatus('');
   }
   function report(error) { setNotice({ text: error.message, error: true }); }
   async function importCSV(event) {
@@ -99,7 +139,47 @@ export default function App() {
     setDocuments(current => current.map(item => item.id === doc.id ? { ...item, selected: checked } : item)); resetResults();
   }
   function removeDocument(doc) {
-    setDocuments(current => current.filter(item => item.id !== doc.id)); URL.revokeObjectURL(doc.url); resetResults();
+    setDocuments(current => current.filter(item => item.id !== doc.id)); if (doc.url.startsWith('blob:')) URL.revokeObjectURL(doc.url); resetResults();
+  }
+  async function login(event) {
+    event.preventDefault(); setAuthBusy(true); setAuthError('');
+    const form = event.currentTarget; const fields = new FormData(form);
+    try {
+      await readResponse(await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'login', username: fields.get('username'), password: fields.get('password') }) }));
+      setAuthenticated(true); form.reset(); loginDialog.current.close();
+    } catch (error) { setAuthError(error.message); }
+    finally { setAuthBusy(false); }
+  }
+  async function logout() {
+    setAuthBusy(true);
+    try { await readResponse(await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'logout' }) })); setAuthenticated(false); setSaveStatus(''); }
+    catch (error) { report(error); }
+    finally { setAuthBusy(false); }
+  }
+  async function saveDefaults() {
+    if (locked || !authenticated || !sharedConfigured) return;
+    setSaving(true); setSaveStatus('Saving shared defaults…');
+    try {
+      if (!prompt.trim() || prompt.length > LIMITS.systemChars) throw new Error('System prompt must contain 1–12,000 characters.');
+      const prepared = [];
+      for (const doc of documents) {
+        let pathname = doc.pathname;
+        if (!pathname) {
+          pathname = `prompt-bench/pdfs/${crypto.randomUUID()}.pdf`;
+          await upload(pathname, doc.file.slice(0, doc.file.size, 'application/pdf'), { access: 'public', contentType: 'application/pdf', handleUploadUrl: '/api/upload' });
+          setDocuments(current => current.map(item => item.id === doc.id ? { ...item, pathname } : item));
+        }
+        prepared.push({ pathname, name: doc.name, selected: doc.selected });
+      }
+      const result = await readResponse(await fetch('/api/defaults', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ systemPrompt: prompt, documents: prepared }) }));
+      setDocuments(current => current.map(doc => {
+        const saved = result.defaults.documents.find(item => item.pathname === doc.pathname);
+        if (doc.url.startsWith('blob:')) URL.revokeObjectURL(doc.url);
+        return { ...doc, ...saved, file: null };
+      }));
+      setSaveStatus('Shared defaults saved. Visitors will load this prompt and library on refresh.');
+    } catch (error) { setSaveStatus(`Save failed: ${error.message} Your edits are still here. Retry or reload to check the latest saved version.`); await checkSession(); }
+    finally { setSaving(false); }
   }
   function patchRow(id, patch) { setRows(current => current.map(row => row.id === id ? { ...row, ...patch } : row)); }
   async function runQueue(list, reset = false) {
@@ -141,10 +221,12 @@ export default function App() {
   }
 
   return <div className="wrap">
-    <header><div><h1>Prompt <span>Bench</span></h1><p className="sub">A workspace for prompts, knowledge, and benchmark cases.</p></div><span className="meta">OpenRouter · Independent requests</span></header>
+    <header><div><h1>Prompt <span>Bench</span></h1><p className="sub">A workspace for prompts, knowledge, and benchmark cases.</p></div><div className="admin-actions"><span className="meta">OpenRouter · Independent requests</span>{authenticated ? <><button id="saveDefaultsBtn" disabled={locked || !sharedConfigured || authBusy} onClick={saveDefaults}>{saving ? 'Saving…' : 'Save as default'}</button><button disabled={running || importing || saving || authBusy} onClick={logout}>Log out</button></> : <button id="loginBtn" disabled={!authReady || running || importing || saving} onClick={() => { setAuthError(''); loginDialog.current.showModal(); }}>Admin login</button>}</div></header>
+    {(defaultsLoading || defaultsError || !sharedConfigured) && <div className={`shared-notice${defaultsError ? ' document-error' : ''}`} role="status">{defaultsLoading ? 'Loading shared defaults…' : defaultsError || 'Shared defaults are not configured. Your edits are temporary; an admin must connect a public Blob store to save them.'}{defaultsError && <button onClick={loadDefaults}>Retry shared defaults</button>}</div>}
+    {saveStatus && <div className="shared-notice" id="saveStatus" role="status">{saveStatus}</div>}
     <div className="grid"><div className="left-column">
       <section className="panel prompt-panel" aria-labelledby="sysLabel"><div className="panel-h"><span className="label" id="sysLabel">System prompt</span><div className="prompt-actions"><span className="meta" id="sysMeta">{prompt.length.toLocaleString()} chars</span><button id="expandPromptBtn" className="expand-prompt" title="Expand system prompt" aria-label="Expand system prompt" aria-haspopup="dialog" disabled={locked} onClick={() => { promptDialog.current.showModal(); expandedPrompt.current.focus(); }}><OpenIcon expand /></button></div></div><textarea id="sysPrompt" spellCheck="false" aria-labelledby="sysLabel" value={prompt} disabled={locked} onChange={event => changePrompt(event.target.value)} /></section>
-      <section className="panel" aria-labelledby="knowledgeLabel"><div className="panel-h"><span className="label" id="knowledgeLabel">Knowledge base</span><span className="chip">This session only</span></div><div className="knowledge-body"><p className="sub">Upload text-based PDFs: up to 5 MB and 10 pages each. Selected full text is used for every question.</p><label className="filebtn" htmlFor="docInput">Upload PDFs<input type="file" id="docInput" multiple accept=".pdf,application/pdf" disabled={locked} onChange={uploadDocuments} /></label><div id="documents">{documents.map(doc => <div className="document" key={doc.id}><label className="document-label"><input type="checkbox" checked={doc.selected} disabled={locked} onChange={event => toggleDocument(doc, event.target.checked)} /><span>{doc.name}<small>{doc.pages} page(s) · {doc.text.length.toLocaleString()} chars</small></span></label><div className="document-actions"><a className="document-open" href={doc.url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${doc.name} in a new tab`} title={`Open ${doc.name} in a new tab`}><OpenIcon /></a><button className="remove-document" disabled={locked} onClick={() => removeDocument(doc)} aria-label={`Remove ${doc.name}`}>Remove</button></div></div>)}</div>{!documents.length && <p className="sub">No documents yet. You can run with the system prompt alone.</p>}<p className="sub upload-notice" id="docNotice" role="status">{importing ? 'Reading file…' : docNotice}</p><p className="meta">{selectedChars.toLocaleString()} / 60,000 selected characters · Up to 10 PDFs. Scans and blank pages are not supported.</p></div></section>
+      <section className="panel" aria-labelledby="knowledgeLabel"><div className="panel-h"><span className="label" id="knowledgeLabel">Knowledge base</span><span className="chip">{authenticated ? 'Save to share' : 'Shared defaults + your edits'}</span></div><div className="knowledge-body"><p className="sub">Upload text-based PDFs: up to 5 MB and 10 pages each. Selected full text is used for every question.</p><label className="filebtn" htmlFor="docInput">Upload PDFs<input type="file" id="docInput" multiple accept=".pdf,application/pdf" disabled={locked} onChange={uploadDocuments} /></label><div id="documents">{documents.map(doc => <div className="document" key={doc.id}><label className="document-label"><input type="checkbox" checked={doc.selected} disabled={locked} onChange={event => toggleDocument(doc, event.target.checked)} /><span>{doc.name}<small>{doc.pages} page(s) · {doc.text.length.toLocaleString()} chars</small></span></label><div className="document-actions"><a className="document-open" href={doc.url} target="_blank" rel="noopener noreferrer" aria-label={`Open ${doc.name} in a new tab`} title={`Open ${doc.name} in a new tab`}><OpenIcon /></a><button className="remove-document" disabled={locked} onClick={() => removeDocument(doc)} aria-label={`Remove ${doc.name}`}>Remove</button></div></div>)}</div>{!documents.length && <p className="sub">No documents yet. You can run with the system prompt alone.</p>}<p className="sub upload-notice" id="docNotice" role="status">{importing ? 'Reading file…' : docNotice}</p><p className="meta">{selectedChars.toLocaleString()} / 60,000 selected characters · Up to 10 PDFs. Scans and blank pages are not supported.</p></div></section>
     </div>
     <section className="panel" aria-labelledby="casesLabel"><div className="panel-h"><span className="label" id="casesLabel">Benchmark cases {isSample && <span className="sample-tag" id="sampleTag">Sample data</span>}</span><span className="meta" id="fileMeta">{fileMeta}</span></div>
       <div className="toolbar"><label className="filebtn" htmlFor="csvInput">Import CSV<input type="file" id="csvInput" accept=".csv,text/csv" disabled={locked} onChange={importCSV} /></label><button className="model-btn" id="modelBtn" disabled={locked} onClick={() => modelDialog.current.showModal()}>Change model · {modelName}</button><span className="spacer" /><button className="primary" id="runBtn" disabled={locked || modelsLoading || !model || !!connectionError || !rows.length} onClick={() => runQueue(rows, true)}>Run all</button><button id="stopBtn" disabled={!running} onClick={stop}>Stop</button><button id="exportBtn" disabled={locked || !snapshot || !rows.some(row => row.status === 'done' || row.status === 'error')} onClick={exportResults}>Export results</button></div>
@@ -154,6 +236,7 @@ export default function App() {
       <div className="tablewrap"><table><thead><tr>{['ID', 'Input', 'Response', 'Status', 'Time / tokens', ''].map((heading, i) => <th key={i}>{heading}</th>)}</tr></thead><tbody id="rows">{rows.map(row => <tr key={row.id}><td className="id">{row.id}</td><td className="txt">{row.input}</td><td className="resp"><div className={`resp-box${!row.response ? ' dim' : ''}`}>{row.response || (row.status === 'running' ? 'Waiting for model…' : row.status === 'error' ? 'No response' : 'Not run yet')}</div>{row.truncated && <div className="meta">Output reached the token cap.</div>}</td><td><span className={`chip ${row.status}`}>{{ queued: 'Queued', running: 'Running', done: 'Done', error: 'Error' }[row.status]}</span>{row.error && <div className="meta document-error">{row.error}</div>}</td><td className="metrics">{row.elapsedMs == null ? '—' : `${(row.elapsedMs / 1000).toFixed(2)} s`}<br />{row.usage?.total_tokens == null ? '— tokens' : `${row.usage.total_tokens} tokens`}<div className="meta">In {row.usage?.prompt_tokens ?? '—'} / Out {row.usage?.completion_tokens ?? '—'}</div></td><td className="act"><button disabled={locked || !model || !!connectionError} onClick={() => runQueue([row])}>Retry</button></td></tr>)}</tbody></table></div>
       <div className="help">CSV needs one column named <code>input</code>, with one question per row. Maximum 50 questions, 4,000 characters each, and a 1 MB CSV. No automatic scoring. Selected document text and questions are sent to OpenRouter when you run.</div>
     </section></div>
+    <dialog id="loginDialog" ref={loginDialog} aria-labelledby="loginTitle"><h2 id="loginTitle">Admin login</h2><p className="sub">Log in to save the shared prompt and document library.</p><form className="login-form" onSubmit={login}><label>Username<input name="username" autoComplete="username" required disabled={authBusy} /></label><label>Password<input name="password" type="password" autoComplete="current-password" required disabled={authBusy} /></label>{authError && <p className="document-error" role="alert">{authError}</p>}<button className="primary" disabled={authBusy}>{authBusy ? 'Logging in…' : 'Log in'}</button></form><form method="dialog"><button disabled={authBusy}>Close</button></form></dialog>
     <dialog id="promptDialog" ref={promptDialog} aria-labelledby="expandedPromptTitle" aria-describedby="expandedPromptHelp"><div className="expanded-prompt-layout"><div><h2 id="expandedPromptTitle">System prompt</h2><p className="sub" id="expandedPromptHelp">Changes sync automatically. Maximum 12,000 characters.</p></div><textarea id="expandedPrompt" ref={expandedPrompt} spellCheck="false" aria-labelledby="expandedPromptTitle" value={prompt} disabled={locked} onChange={event => changePrompt(event.target.value)} /><form method="dialog"><button>Close</button></form></div></dialog>
     <dialog id="modelDialog" ref={modelDialog} aria-labelledby="modelTitle"><h2 id="modelTitle">Choose a model</h2><p className="sub">Text models available through OpenRouter. Usage is billed to the server account.</p><input className="model-search" aria-label="Search models" placeholder="Search name or model ID" value={search} onChange={event => setSearch(event.target.value)} /><div className="model-options" id="modelOptions">{models.filter(item => `${item.name} ${item.id}`.toLowerCase().includes(search.toLowerCase())).map(item => <button key={item.id} aria-pressed={model === item.id} onClick={() => { setModel(item.id); resetResults(); modelDialog.current.close(); }}>{item.name}<small className="meta">{item.id} · {item.contextLength.toLocaleString()} context</small></button>)}{!modelsLoading && !models.length && <p className="sub">{connectionError || 'No models available.'}</p>}</div><form method="dialog"><button>Close</button></form></dialog>
   </div>;
