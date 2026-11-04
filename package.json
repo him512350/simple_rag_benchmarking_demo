@@ -11,9 +11,11 @@
   },
   "dependencies": {
     "@vercel/blob": "^2.8.2",
+    "fflate": "^0.8.3",
     "pdfjs-dist": "^6.5.438",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "vite": "^7.2.0"

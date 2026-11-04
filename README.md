@@ -28,7 +28,7 @@ Use Vercel Deployment Protection and set an OpenRouter key spending limit before
 
 ## Use
 
-- A CSV needs one column named `input`, one question per row. Header case and surrounding spaces are ignored. Extra columns are ignored; IDs are generated. Quoted commas, multiline fields, and Chinese text are supported. Blank questions are skipped. Invalid imports preserve existing cases.
+- **Import CSV/ XLSX** accepts `.csv` or `.xlsx` files with one column named `input`, one question per row. For XLSX, only the first worksheet is read. Header case and surrounding spaces are ignored. Extra columns/sheets are ignored; IDs are generated. Quoted CSV fields, multiline text, and Chinese are supported. Blank questions are skipped. Input cells must be plain text: formulas (even cached results), merged input cells, numbers, dates, and booleans in XLSX are rejected. Invalid imports preserve existing cases and results. Legacy `.xls`, macro-enabled files, encrypted/corrupt workbooks, and renamed non-workbooks are unsupported.
 - New runs currently use only `nvidia/nemotron-3.5-lightning:free`, selected from OpenRouter’s compatible text-model metadata. The server rejects other model IDs, and the UI never silently switches to a paid alternative if the configured model is unavailable. Router/automatic-selection models are excluded. Model metadata is cached on the server for five minutes. The model's supported output-limit parameter is used; the app never silently changes the selected model.
 - Admins can upload selectable-text PDFs. All visitors can check the saved documents to use. Their **full extracted text**, with document names, is included as reference data for each question. There is no chunking, embedding search, OCR, database, or chat memory. Extraction happens once in the browser. Unselected documents are not sent to OpenRouter.
 - The document icon opens the original PDF in a separate tab. Selecting documents and reading them are separate actions. Only admins see PDF upload and document Remove controls. Guests can select documents, open PDFs, edit the prompt, import questions, and run benchmarks; refresh restores the saved project.
@@ -45,6 +45,8 @@ Use Vercel Deployment Protection and set an OpenRouter key spending limit before
 | System prompt | 12,000 characters |
 | Question | 4,000 characters |
 | CSV | 1 MiB, 50 nonblank questions |
+| XLSX | 5 MiB; first worksheet; 50 nonblank questions |
+| XLSX archive / parsing | 200 entries, 20 MiB expanded total, 8 MiB per entry, 50,000 stored first-sheet cells, 10-second worker timeout |
 | Benchmark request JSON | 256 KiB (UTF-8, checked in browser and server) |
 | Project save request / manifest | 3 MiB (UTF-8) |
 | Saved answer / error | 32,000 / 2,000 characters per case |
@@ -62,7 +64,7 @@ The original standalone design is preserved in `Prompt Bench.html` as a historic
 
 `npm test` covers API validation, fixed upstream requests, secret handling, metadata filtering/caching, output limits, context limits, cancellation, and CSV parsing/export. Browser checks use mocked OpenRouter responses when no server key is available; those checks do not establish live provider accuracy or performance. No production deployment is required to build or test locally.
 
-Verified with Node.js 24: 45 automated tests and the production build pass. Chrome browser checks covered English and Chinese PDF text extraction, multiple selected documents, file/page/text limits, CSV import, cancellation with two active requests, retries and provider errors, token display/truncation, full-prompt/document attribution in exports, and 320/390/920/1440-pixel layouts. The model dialog was also checked with over 400 real model metadata entries. Completion responses and reported durations in these browser checks were mocked: no paid/live completion was performed.
+Verified with Node.js 24: 51 automated tests and the production build pass. Chrome browser checks covered English and Chinese PDF text extraction, multiple selected documents, file/page/text limits, CSV import, cancellation with two active requests, retries and provider errors, token display/truncation, full-prompt/document attribution in exports, and 320/390/920/1440-pixel layouts. The model dialog was also checked with over 400 real model metadata entries. Completion responses and reported durations in these browser checks were mocked: no paid/live completion was performed.
 
 ## Shared defaults and admin login
 
@@ -95,3 +97,11 @@ Deletion regression checks cover authorization/CSRF, confirmation mismatch, Defa
 The single shared configuration is `lib/model-config.js`. To restore all otherwise-compatible OpenRouter text models, change its setting to `export const ALLOWED_MODEL_IDS = null;`. The default model remains `nvidia/nemotron-3.5-lightning:free` when available; unrestricted mode otherwise chooses the first compatible model. Restricted mode shows an error if the configured model is missing and never falls back to another model. Historical result sources remain unchanged, and clicking an already-selected model does not clear them.
 
 Project loading uses accessible skeleton placeholders for the prompt, knowledge base, and cases until saved PDFs have finished text extraction. They respect reduced-motion preferences, disappear on success/error/empty results, and do not obscure already-loaded historical results while model metadata is still loading.
+
+## Spreadsheet imports
+
+The XLSX parser is loaded dynamically only after an `.xlsx` file is selected and runs in a dedicated worker. It uses the official SheetJS 0.20.3 distribution from `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz` and `fflate` for bounded ZIP validation. No legacy registry `xlsx` release is installed. The parser checks central-directory and actual expanded sizes, completes every entry, rejects macros, and iterates sparse cell keys rather than expanding a worksheet’s dimension rectangle. Exceeded limits fail explicitly; rows are never silently truncated. Imported questions can be saved with the project using the existing admin save action.
+
+Verification covers real XLSX fixtures with Chinese/multiline values, first-sheet selection, cached and uncached formulas, input merges/types, sparse dimensions, ZIP data descriptors, size mismatch/expansion limits, wrong formats, preservation of existing results on error, import/navigation races, and import-save-reload. Production-build browser checks confirm CSV imports do not load the XLSX chunk or worker until an XLSX selection occurs. All storage and completion transport in these tests is mocked.
+
+Only checked knowledge documents are sent with a benchmark. With none checked, the server receives no document context and sends the question with the system prompt alone. A URL written inside the prompt remains ordinary prompt text: this app does not fetch that web page automatically. This does not change the model provider’s own capabilities.

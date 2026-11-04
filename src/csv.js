@@ -25,9 +25,12 @@ export function rowsFromCSV(text) {
   if (grid.length < 2) throw new Error('The file has no data rows under the header.');
   const column = grid[0].findIndex(header => header.trim().toLowerCase() === 'input');
   if (column < 0) throw new Error('Could not find the required column named "input".');
-  const questions = grid.slice(1).map(row => (row[column] ?? '').trim()).filter(Boolean);
+  return questionsToRows(grid.slice(1).map(row => (row[column] ?? '').trim()).filter(Boolean));
+}
+
+export function questionsToRows(questions) {
   if (!questions.length) throw new Error('Every input cell is empty.');
-  if (questions.length > LIMITS.cases) throw new Error(`Import at most ${LIMITS.cases} questions per CSV.`);
+  if (questions.length > LIMITS.cases) throw new Error(`Import at most ${LIMITS.cases} questions per file.`);
   if (questions.some(question => question.length > LIMITS.questionChars)) throw new Error(`Each question must be at most ${LIMITS.questionChars.toLocaleString()} characters.`);
   return questions.map((input, i) => ({ id: String(i + 1).padStart(2, '0'), input }));
 }
